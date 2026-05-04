@@ -44,13 +44,21 @@ describe("runtime-process (integration)", () => {
 
   it("sendMessage writes to stdin and output is captured", async () => {
     await runtime.sendMessage(handle, "hello from test");
-    // Windows ConPTY round-trip (named pipe → PTY host → child stdin → child stdout
-    // → ring buffer → named pipe → reader) needs more headroom than the Unix
-    // direct-stdin path. 200ms was unreliable on slow Windows runners.
-    await sleep(process.platform === "win32" ? 1500 : 200);
-    const output = await runtime.getOutput(handle);
+    // Poll until the payload appears instead of using a fixed sleep: round-trip
+    // latency varies wildly across platforms and runners (Unix direct-stdin:
+    // ~ms; Windows ConPTY through named pipe + pwsh + findstr startup: hundreds
+    // of ms to seconds under AV / cold-cache conditions). A fixed sleep either
+    // flakes or wastes time. Polling for the substring (not just non-empty
+    // output) is also robust to incidental shell banners arriving first.
+    const deadline = Date.now() + 10_000;
+    let output = "";
+    while (Date.now() < deadline) {
+      output = await runtime.getOutput(handle);
+      if (output.includes("hello from test")) break;
+      await sleep(100);
+    }
     expect(output).toContain("hello from test");
-  });
+  }, 15_000);
 
   it("getMetrics returns uptime", async () => {
     const metrics = await runtime.getMetrics!(handle);
