@@ -3,23 +3,16 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMediaQuery, MOBILE_BREAKPOINT } from "@/hooks/useMediaQuery";
-import {
-  type DashboardSession,
-  TERMINAL_STATUSES,
-  NON_RESTORABLE_STATUSES,
-} from "@/lib/types";
+import { type DashboardSession, TERMINAL_STATUSES, NON_RESTORABLE_STATUSES } from "@/lib/types";
 import dynamic from "next/dynamic";
 import { getSessionTitle } from "@/lib/format";
 import type { ProjectInfo } from "@/lib/project-name";
 import { SidebarContext } from "./workspace/SidebarContext";
 import { projectDashboardPath, projectSessionPath } from "@/lib/routes";
 
-import { ProjectSidebar } from "./ProjectSidebar";
+import { ProjectSidebar, type ProjectSidebarOrchestrator } from "./ProjectSidebar";
 import { MobileBottomNav } from "./MobileBottomNav";
-import {
-  SessionDetailHeader,
-  type OrchestratorZones,
-} from "./SessionDetailHeader";
+import { SessionDetailHeader, type OrchestratorZones } from "./SessionDetailHeader";
 import { SessionEndedSummary } from "./SessionEndedSummary";
 import { sessionActivityMeta } from "./session-detail-utils";
 
@@ -44,6 +37,7 @@ interface SessionDetailProps {
   projectOrchestratorId?: string | null;
   projects?: ProjectInfo[];
   sidebarSessions?: DashboardSession[] | null;
+  sidebarOrchestrators?: ProjectSidebarOrchestrator[];
   sidebarLoading?: boolean;
   sidebarError?: boolean;
   onRetrySidebar?: () => void;
@@ -56,6 +50,7 @@ export function SessionDetail({
   projectOrchestratorId = null,
   projects = [],
   sidebarSessions = [],
+  sidebarOrchestrators,
   sidebarLoading = false,
   sidebarError = false,
   onRetrySidebar,
@@ -175,6 +170,7 @@ export function SessionDetail({
               <ProjectSidebar
                 projects={projects}
                 sessions={sidebarSessions}
+                orchestrators={sidebarOrchestrators}
                 loading={sidebarLoading}
                 error={sidebarError}
                 onRetry={onRetrySidebar}
@@ -187,10 +183,7 @@ export function SessionDetail({
             </div>
           ) : null}
           {mobileSidebarOpen && (
-            <div
-              className="sidebar-mobile-backdrop"
-              onClick={() => setMobileSidebarOpen(false)}
-            />
+            <div className="sidebar-mobile-backdrop" onClick={() => setMobileSidebarOpen(false)} />
           )}
 
           <div className="dashboard-main dashboard-main--desktop">
@@ -208,6 +201,7 @@ export function SessionDetail({
                 ) : (
                   <DirectTerminal
                     sessionId={session.id}
+                    projectId={session.projectId}
                     tmuxName={session.metadata?.tmuxName}
                     startFullscreen={startFullscreen}
                     variant={terminalVariant}
@@ -227,9 +221,7 @@ export function SessionDetail({
           activeTab={isOrchestrator ? "orchestrator" : undefined}
           dashboardHref={dashboardHref}
           prsHref={
-            session.projectId
-              ? `/?project=${encodeURIComponent(session.projectId)}&tab=prs`
-              : "/"
+            session.projectId ? `/?project=${encodeURIComponent(session.projectId)}&tab=prs` : "/"
           }
           showOrchestrator={!!orchestratorHref}
           orchestratorHref={orchestratorHref}

@@ -32,8 +32,8 @@ describe("ProjectSidebar", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders nothing when there are no projects", () => {
-    const { container } = render(
+  it("renders the empty-state header with the + button when no projects are configured", () => {
+    render(
       <ProjectSidebar
         projects={[]}
         sessions={[]}
@@ -42,7 +42,67 @@ describe("ProjectSidebar", () => {
       />,
     );
 
-    expect(container.firstChild).toBeNull();
+    expect(screen.getByText("Projects")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /new project/i })).toBeInTheDocument();
+    expect(screen.getByText(/no projects yet/i)).toBeInTheDocument();
+  });
+
+  it("opens AddProjectModal from the empty-state + button", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ entries: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ProjectSidebar
+        projects={[]}
+        sessions={[]}
+        activeProjectId={undefined}
+        activeSessionId={undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /new project/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: /add project/i })).toBeInTheDocument();
+    });
+  });
+
+  it("renders the theme toggle in the empty-state footer", () => {
+    render(
+      <ProjectSidebar
+        projects={[]}
+        sessions={[]}
+        activeProjectId={undefined}
+        activeSessionId={undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /switch to (dark|light) mode/i })).toBeInTheDocument();
+  });
+
+  it("renders a collapsed empty rail when collapsed with no projects", () => {
+    const { container } = render(
+      <ProjectSidebar
+        projects={[]}
+        sessions={[]}
+        activeProjectId={undefined}
+        activeSessionId={undefined}
+        collapsed
+      />,
+    );
+
+    expect(container.querySelector(".project-sidebar--collapsed")).not.toBeNull();
+    // Header label, empty-state copy, and footer are hidden in the collapsed rail
+    expect(screen.queryByText("Projects")).not.toBeInTheDocument();
+    expect(screen.queryByText(/no projects yet/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /switch to (dark|light) mode/i }),
+    ).not.toBeInTheDocument();
+    // The + button is still reachable so users can add a project from the rail
+    expect(screen.getByRole("button", { name: /new project/i })).toBeInTheDocument();
   });
 
   it("renders the compact sidebar header and project rows", () => {
@@ -164,7 +224,6 @@ describe("ProjectSidebar", () => {
           id: "project-2",
           name: "Project Two",
           path: "/tmp/project-2",
-          storageKey: "storage/project-2",
           repo: "org/project-2",
           defaultBranch: "main",
           agent: "claude-code",
@@ -403,6 +462,61 @@ describe("ProjectSidebar", () => {
 
     expect(screen.getByText("1")).toBeInTheDocument();
     expect(screen.queryByText("Orchestrator")).not.toBeInTheDocument();
+  });
+
+  it("shows 'Open orchestrator' in the project actions menu when the orchestrators prop has an entry", async () => {
+    render(
+      <ProjectSidebar
+        projects={projects}
+        sessions={[]}
+        orchestrators={[{ id: "project-2-orchestrator-1", projectId: "project-2" }]}
+        activeProjectId="project-1"
+        activeSessionId={undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Project actions for Project Two/i }));
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Open orchestrator" }),
+    ).toBeInTheDocument();
+  });
+
+  it("omits 'Open orchestrator' from the menu when no orchestrator entry exists for the project", async () => {
+    render(
+      <ProjectSidebar
+        projects={projects}
+        sessions={[]}
+        orchestrators={[{ id: "project-1-orchestrator", projectId: "project-1" }]}
+        activeProjectId="project-1"
+        activeSessionId={undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Project actions for Project Two/i }));
+
+    expect(await screen.findByRole("menuitem", { name: "Project settings" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Open orchestrator" })).not.toBeInTheDocument();
+  });
+
+  it("navigates to the orchestrator id from the prop when 'Open orchestrator' is clicked", async () => {
+    render(
+      <ProjectSidebar
+        projects={projects}
+        sessions={[]}
+        orchestrators={[{ id: "project-2-orchestrator-1", projectId: "project-2" }]}
+        activeProjectId="project-1"
+        activeSessionId={undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Project actions for Project Two/i }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Open orchestrator" }));
+
+    expect(mockPush).toHaveBeenCalledWith("/projects/project-2/sessions/project-2-orchestrator-1");
+    await waitFor(() => {
+      expect(screen.queryByRole("menuitem", { name: "Open orchestrator" })).not.toBeInTheDocument();
+    });
   });
 
   it("renders the collapsed rail when collapsed", () => {

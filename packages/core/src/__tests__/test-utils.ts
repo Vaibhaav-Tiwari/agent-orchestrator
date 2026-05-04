@@ -2,8 +2,9 @@ import { vi } from "vitest";
 import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createHash, randomUUID } from "node:crypto";
-import { getSessionsDir, getProjectBaseDir } from "../paths.js";
+import { randomUUID } from "node:crypto";
+import { getProjectSessionsDir, getProjectDir } from "../paths.js";
+import { resetOpenCodeSessionListCache } from "../session-manager.js";
 import { createInitialCanonicalLifecycle, deriveLegacyStatus } from "../lifecycle-state.js";
 import { createActivitySignal } from "../activity-signal.js";
 import type {
@@ -203,13 +204,20 @@ export function createMockSCM(overrides: Partial<SCM> = {}): SCM {
     enrichSessionsPRBatch: vi.fn().mockImplementation(async (prs: PRInfo[]) => {
       const result = new Map();
       for (const pr of prs) {
+        const [state, ciStatus, reviewDecision, mergeability, ciChecks] = await Promise.all([
+          scm.getPRState(pr),
+          scm.getCISummary(pr),
+          scm.getReviewDecision(pr),
+          scm.getMergeability(pr),
+          scm.getCIChecks(pr),
+        ]);
         result.set(`${pr.owner}/${pr.repo}#${pr.number}`, {
-          state: "open" as const,
-          ciStatus: "passing" as const,
-          reviewDecision: "none" as const,
-          mergeable: false,
-          hasConflicts: false,
-          ciChecks: [],
+          state: state ?? "open",
+          ciStatus: ciStatus ?? "passing",
+          reviewDecision: reviewDecision ?? "none",
+          mergeable: mergeability?.mergeable ?? false,
+          hasConflicts: mergeability ? !mergeability.noConflicts : false,
+          ciChecks: ciChecks ?? [],
         });
       }
       return result;
@@ -296,7 +304,6 @@ export function createTestEnvironment(): TestEnvironment {
   const configPath = join(tmpDir, "agent-orchestrator.yaml");
   writeFileSync(configPath, "projects: {}\n");
 
-  const storageKey = "111111111111";
   const config: OrchestratorConfig = {
     configPath,
     port: 3000,
@@ -312,7 +319,6 @@ export function createTestEnvironment(): TestEnvironment {
         name: "My App",
         repo: "org/my-app",
         path: join(tmpDir, "my-app"),
-        storageKey,
         defaultBranch: "main",
         sessionPrefix: "app",
         scm: { plugin: "github" },
@@ -329,7 +335,7 @@ export function createTestEnvironment(): TestEnvironment {
     readyThresholdMs: 300_000,
   };
 
-  const sessionsDir = getSessionsDir(storageKey);
+  const sessionsDir = getProjectSessionsDir("my-app");
   mkdirSync(sessionsDir, { recursive: true });
 
   const cleanup = () => {
@@ -338,9 +344,9 @@ export function createTestEnvironment(): TestEnvironment {
     } else {
       process.env["HOME"] = previousHome;
     }
-    const projectBaseDir = getProjectBaseDir(storageKey);
-    if (existsSync(projectBaseDir)) {
-      rmSync(projectBaseDir, { recursive: true, force: true });
+    const projectDir = getProjectDir("my-app");
+    if (existsSync(projectDir)) {
+      rmSync(projectDir, { recursive: true, force: true });
     }
     rmSync(tmpDir, { recursive: true, force: true });
   };
@@ -356,7 +362,6 @@ export interface TestContext {
   tmpDir: string;
   configPath: string;
   sessionsDir: string;
-  storageKey: string;
   mockRuntime: Runtime;
   mockAgent: Agent;
   mockWorkspace: Workspace;
@@ -367,6 +372,7 @@ export interface TestContext {
 }
 
 export function setupTestContext(): TestContext {
+  resetOpenCodeSessionListCache();
   const originalPath = process.env.PATH;
   const originalHome = process.env["HOME"];
   const tmpDir = join(tmpdir(), `ao-test-session-mgr-${randomUUID()}`);
@@ -375,7 +381,6 @@ export function setupTestContext(): TestContext {
 
   const configPath = join(tmpDir, "agent-orchestrator.yaml");
   writeFileSync(configPath, "projects: {}\n");
-  const storageKey = createHash("sha256").update(join(tmpDir, "my-app")).digest("hex").slice(0, 12);
 
   const { runtime: mockRuntime, agent: mockAgent, workspace: mockWorkspace } = createMockPlugins();
   const mockRegistry = createMockRegistry({
@@ -399,7 +404,6 @@ export function setupTestContext(): TestContext {
         name: "My App",
         repo: "org/my-app",
         path: join(tmpDir, "my-app"),
-        storageKey,
         defaultBranch: "main",
         sessionPrefix: "app",
         scm: { plugin: "github" },
@@ -417,14 +421,13 @@ export function setupTestContext(): TestContext {
     readyThresholdMs: 300_000,
   };
 
-  const sessionsDir = getSessionsDir(storageKey);
+  const sessionsDir = getProjectSessionsDir("my-app");
   mkdirSync(sessionsDir, { recursive: true });
 
   return {
     tmpDir,
     configPath,
     sessionsDir,
-    storageKey,
     mockRuntime,
     mockAgent,
     mockWorkspace,
@@ -442,9 +445,9 @@ export function teardownTestContext(ctx: TestContext): void {
   } else {
     process.env["HOME"] = ctx.originalHome;
   }
-  const projectBaseDir = getProjectBaseDir(ctx.config.projects["my-app"]!.storageKey);
-  if (existsSync(projectBaseDir)) {
-    rmSync(projectBaseDir, { recursive: true, force: true });
+  const projectDir = getProjectDir("my-app");
+  if (existsSync(projectDir)) {
+    rmSync(projectDir, { recursive: true, force: true });
   }
   rmSync(ctx.tmpDir, { recursive: true, force: true });
 }

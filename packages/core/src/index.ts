@@ -121,6 +121,10 @@ export {
 export { createSessionManager } from "./session-manager.js";
 export type { SessionManagerDeps } from "./session-manager.js";
 
+// Process-scoped async memoization — used by plugins to dedupe shared
+// prerequisite checks (e.g. multiple github plugins checking gh auth).
+export { memoizeAsync, _clearProcessCacheForTests } from "./process-cache.js";
+
 // Lifecycle manager — state machine + reaction engine
 export { createLifecycleManager } from "./lifecycle-manager.js";
 export type { LifecycleManagerDeps } from "./lifecycle-manager.js";
@@ -151,6 +155,16 @@ export {
   parseWebhookBranchRef,
 } from "./scm-webhook-utils.js";
 export { asValidOpenCodeSessionId } from "./opencode-session-id.js";
+export {
+  OPENCODE_SESSION_LIST_CACHE_TTL_MS,
+  getOpenCodeTmpDir,
+  ensureOpenCodeTmpDir,
+  getOpenCodeChildEnv,
+  getCachedOpenCodeSessionList,
+  invalidateOpenCodeSessionListCache,
+  resetOpenCodeSessionListCache,
+} from "./opencode-shared.js";
+export type { OpenCodeSessionListEntry } from "./opencode-shared.js";
 export {
   getWorkspaceAgentsMdPath,
   writeWorkspaceOpenCodeAgentsMd,
@@ -229,6 +243,15 @@ export type {
 
 // Path utilities — hash-based directory structure
 export {
+  // V2 path functions (projects/{projectId}/ layout)
+  getProjectDir,
+  getProjectSessionsDir,
+  getProjectWorktreesDir,
+  getProjectFeedbackReportsDir,
+  getOrchestratorPath,
+  getSessionPath,
+  parseTmuxNameV2,
+  // Legacy path functions (deprecated — migration only)
   generateConfigHash,
   generateProjectId,
   generateSessionPrefix,
@@ -261,8 +284,7 @@ export {
   getLocalProjectConfigPath,
   repairWrappedLocalProjectConfig,
   registerProjectInGlobalConfig,
-  relinkProjectInGlobalConfig,
-  StorageKeyCollisionError,
+  generateExternalId,
   buildEffectiveProjectConfig,
   resolveProjectIdentity,
   isOldConfigFormat,
@@ -275,7 +297,6 @@ export type {
   LocalProjectConfig,
   LocalProjectConfigLoadResult,
   RegisterProjectOptions,
-  RelinkProjectOptions,
 } from "./global-config.js";
 
 export { loadEffectiveProjectConfig, iterateAllProjects } from "./project-resolver.js";
@@ -322,7 +343,6 @@ export {
   saveRegistered,
   getPortfolio,
   registerProject,
-  relinkProject,
   unregisterProject,
   refreshProject,
 } from "./portfolio-registry.js";
@@ -336,3 +356,36 @@ export {
   resolvePortfolioSession,
   derivePortfolioProjectId,
 } from "./portfolio-routing.js";
+
+// Storage V2 migration — one-time converter from hash-based to projectId-based layout
+export {
+  migrateStorage,
+  rollbackStorage,
+  inventoryHashDirs,
+  convertKeyValueToJson,
+} from "./migration/storage-v2.js";
+export type {
+  MigrationOptions,
+  MigrationResult,
+  RollbackOptions,
+  HashDirEntry,
+} from "./migration/storage-v2.js";
+
+export { atomicWriteFileSync } from "./atomic-write.js";
+
+// Activity event logging — structured diagnostic event trail
+export { recordActivityEvent, droppedEventCount } from "./activity-events.js";
+export { isActivityEventsFtsEnabled } from "./events-db.js";
+export type {
+  ActivityEventInput,
+  ActivityEventKind,
+  ActivityEventSource,
+  ActivityEventLevel,
+  ActivityEvent,
+} from "./activity-events.js";
+export {
+  queryActivityEvents,
+  searchActivityEvents,
+  getActivityEventStats,
+} from "./query-activity-events.js";
+export type { ActivityEventFilter, ActivityEventStats } from "./query-activity-events.js";

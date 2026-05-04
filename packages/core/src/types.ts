@@ -67,7 +67,8 @@ export type CanonicalPRReason =
   | "approved"
   | "merge_ready"
   | "merged"
-  | "closed_unmerged";
+  | "closed_unmerged"
+  | "cleared_on_restore";
 
 export type CanonicalRuntimeState = "unknown" | "alive" | "exited" | "missing" | "probe_failed";
 
@@ -231,19 +232,8 @@ export const TERMINAL_STATUSES: ReadonlySet<SessionStatus> = new Set([
 /** Activity states that indicate the session is no longer running. */
 export const TERMINAL_ACTIVITIES: ReadonlySet<ActivityState> = new Set(["exited"]);
 
-/** Statuses that must never be restored (e.g. already merged). */
-export const NON_RESTORABLE_STATUSES: ReadonlySet<SessionStatus> = new Set(["merged"]);
-
-/** Check whether lifecycle metadata indicates the session's PR is already merged. */
-function hasMergedLifecyclePR(lifecycle: CanonicalSessionLifecycle): boolean {
-  return (
-    (
-      lifecycle as CanonicalSessionLifecycle & {
-        pr?: { state?: string | null } | null;
-      }
-    ).pr?.state === "merged"
-  );
-}
+/** Statuses that must never be restored. */
+export const NON_RESTORABLE_STATUSES: ReadonlySet<SessionStatus> = new Set([]);
 
 /** Check if a session is in a terminal (dead) state. */
 export function isTerminalSession(session: {
@@ -275,8 +265,7 @@ export function isRestorable(session: {
   if (session.lifecycle) {
     return (
       isTerminalSession(session) &&
-      !NON_RESTORABLE_STATUSES.has(session.status) &&
-      !hasMergedLifecyclePR(session.lifecycle)
+      !NON_RESTORABLE_STATUSES.has(session.status)
     );
   }
   return isTerminalSession(session) && !NON_RESTORABLE_STATUSES.has(session.status);
@@ -420,6 +409,13 @@ export interface Runtime {
 
   /** Get info needed to attach a human to this session (for Terminal plugin) */
   getAttachInfo?(handle: RuntimeHandle): Promise<AttachInfo>;
+
+  /**
+   * Optional: validate that this runtime's prerequisites are present before
+   * it is exercised by `ao spawn`. Throw with an actionable, human-readable
+   * message; the CLI catches and formats the error.
+   */
+  preflight?(context: PreflightContext): Promise<void>;
 }
 
 export interface RuntimeCreateConfig {
@@ -508,6 +504,19 @@ export interface Agent {
    */
   getRestoreCommand?(session: Session, project: ProjectConfig): Promise<string | null>;
 
+  /**
+   * Optional: run setup BEFORE the agent process is launched.
+   *
+   * Use this when a plugin needs to observe state that the agent itself will
+   * mutate at startup. Captured *after* the workspace exists but *before*
+   * `runtime.create()` spawns the agent — so the snapshot is taken cleanly,
+   * with no race against the agent's own initialization writes.
+   *
+   * Receives only the workspace path because the full Session object (with
+   * runtime handle, lifecycle, etc.) does not exist yet at this point.
+   */
+  preLaunchSetup?(workspacePath: string): Promise<void>;
+
   /** Optional: run setup after agent is launched (e.g. configure MCP servers) */
   postLaunchSetup?(session: Session): Promise<void>;
 
@@ -538,11 +547,26 @@ export interface Agent {
    * `getActivityState` already reads richer data from the agent's own session files.
    */
   recordActivity?(session: Session, terminalOutput: string): Promise<void>;
+
+  /**
+   * Optional: validate that this agent's prerequisites are present before
+   * it is exercised by `ao spawn`. Throw with an actionable error message.
+   */
+  preflight?(context: PreflightContext): Promise<void>;
 }
 
 export interface AgentLaunchConfig {
   sessionId: SessionId;
   projectConfig: ProjectConfig;
+  /**
+   * Per-session workspace path. Differs from `projectConfig.path` when the
+   * workspace plugin (e.g. worktree mode) creates an isolated checkout per
+   * session. Plugins that need the agent's actual cwd — for cwd-derived
+   * lookups, --work-dir flags, file-based discovery — must use this when
+   * present. Falls back to `projectConfig.path` when undefined (clone-mode
+   * workspaces, or plugins not yet plumbing it through).
+   */
+  workspacePath?: string;
   issueId?: string;
   prompt?: string;
   permissions?: AgentPermissionInput;
@@ -590,6 +614,8 @@ export interface AgentSessionInfo {
   summaryIsFallback?: boolean;
   /** Agent's internal session ID (for resume) */
   agentSessionId: string | null;
+  /** Agent-owned metadata worth persisting for later restore. */
+  metadata?: Record<string, string>;
   /** Estimated cost so far */
   cost?: CostEstimate;
 }
@@ -627,6 +653,12 @@ export interface Workspace {
 
   /** Optional: restore a workspace (e.g. recreate a worktree for an existing branch) */
   restore?(config: WorkspaceCreateConfig, workspacePath: string): Promise<WorkspaceInfo>;
+
+  /**
+   * Optional: validate that this workspace's prerequisites (e.g. git in PATH,
+   * write access to the worktree root) are present before `ao spawn`.
+   */
+  preflight?(context: PreflightContext): Promise<void>;
 }
 
 export interface WorkspaceCreateConfig {
@@ -634,6 +666,8 @@ export interface WorkspaceCreateConfig {
   project: ProjectConfig;
   sessionId: SessionId;
   branch: string;
+  /** Override the base directory for worktrees (e.g. V2 project-scoped dir). */
+  worktreeDir?: string;
 }
 
 export interface WorkspaceInfo {
@@ -679,6 +713,13 @@ export interface Tracker {
 
   /** Optional: create a new issue */
   createIssue?(input: CreateIssueInput, project: ProjectConfig): Promise<Issue>;
+
+  /**
+   * Optional: validate that this tracker's prerequisites (auth tokens, CLI
+   * tools) are present before `ao spawn` runs. Throw with an actionable
+   * error message.
+   */
+  preflight?(context: PreflightContext): Promise<void>;
 }
 
 export interface Issue {
@@ -819,6 +860,14 @@ export interface SCM {
    * @returns Map keyed by "${owner}/${repo}#${number}" containing enrichment data
    */
   enrichSessionsPRBatch?(prs: PRInfo[], observer?: BatchObserver, repos?: string[]): Promise<Map<string, PREnrichmentData>>;
+
+  /**
+   * Optional: validate that this SCM's prerequisites (auth, CLI tools) are
+   * present before `ao spawn` runs. Plugins should consult
+   * `context.intent.willClaimExistingPR` and skip PR-write prereqs when the
+   * spawn won't exercise them.
+   */
+  preflight?(context: PreflightContext): Promise<void>;
 }
 
 /**
@@ -1137,6 +1186,7 @@ export type EventPriority = "urgent" | "action" | "warning" | "info";
 /** All orchestrator event types */
 export type EventType =
   // Session lifecycle
+  | "session.spawn_started"
   | "session.spawned"
   | "session.working"
   | "session.exited"
@@ -1324,7 +1374,6 @@ export interface OrchestratorConfig {
 export interface DegradedProjectEntry {
   projectId: string;
   path: string;
-  storageKey: string;
   resolveError: string;
 }
 
@@ -1428,12 +1477,6 @@ export interface ProjectConfig {
 
   /** Local path to the repo */
   path: string;
-
-  /** Persisted storage hash — stable across directory moves */
-  storageKey?: string;
-
-  /** Canonical git origin URL associated with the storage identity */
-  originUrl?: string;
 
   resolveError?: string;
 
@@ -1655,39 +1698,69 @@ export interface PluginModule<T = unknown> {
   detect?(): boolean;
 }
 
+/**
+ * Context passed to a plugin's `preflight()` method.
+ *
+ * Describes the **intent** of the operation (what it will do), not the CLI
+ * flags that triggered it. Plugins should never know about specific flag
+ * names — translate flags into intent at the CLI boundary so adding a new
+ * flag doesn't ripple into every plugin that cares about a related operation.
+ */
+export interface PreflightContext {
+  /** The project the operation runs against. */
+  project: ProjectConfig;
+
+  /** What the operation will do. Plugins decide whether their prereqs apply. */
+  intent: {
+    /** Whether the spawn is for a worker session or the orchestrator. */
+    role: "worker" | "orchestrator";
+
+    /**
+     * Whether the operation will exercise SCM PR-write paths
+     * (e.g. claiming an existing PR for the new session). When false, an SCM
+     * plugin's preflight can skip PR-write prereqs.
+     */
+    willClaimExistingPR: boolean;
+  };
+}
+
 // =============================================================================
-// SESSION METADATA (flat file format)
+// SESSION METADATA
 // =============================================================================
 
 /**
- * Session metadata stored as flat key=value files.
- * Matches the existing bash script format for backwards compatibility.
+ * Session metadata stored as JSON files under projects/{projectId}/sessions/.
  *
- * Note: In the new architecture, session files are named with user-facing names
- * (e.g., "int-1") and contain a tmuxName field for the globally unique tmux name
- * (e.g., "a3b4c5d6e7f8-int-1").
+ * Session files are named with user-facing session IDs (e.g., "ao-1.json").
+ * The tmuxName field matches the session ID (e.g., "ao-1") — no hash prefix.
  */
 export interface SessionMetadata {
   worktree: string;
   branch: string;
   status: string;
-  stateVersion?: string;
-  statePayload?: string;
-  tmuxName?: string; // Globally unique tmux session name (includes hash)
+  lifecycle?: CanonicalSessionLifecycle;
+  tmuxName?: string; // Tmux session name (matches session ID, e.g. "ao-1")
   issue?: string;
+  issueTitle?: string; // Issue title for event enrichment
   pr?: string;
-  prAutoDetect?: "on" | "off";
+  prAutoDetect?: boolean;
   summary?: string;
   project?: string;
   agent?: string; // Agent plugin name (e.g. "codex", "claude-code") — persisted for lifecycle
   createdAt?: string;
-  runtimeHandle?: string;
+  runtimeHandle?: RuntimeHandle;
   restoredAt?: string;
   role?: string; // "orchestrator" for orchestrator sessions
-  dashboardPort?: number;
-  terminalWsPort?: number;
-  directTerminalWsPort?: number;
+  dashboard?: {
+    port?: number;
+    terminalWsPort?: number;
+    directTerminalWsPort?: number;
+  };
   opencodeSessionId?: string;
+  claudeSessionUuid?: string;
+  codexThreadId?: string;
+  codexModel?: string;
+  restoreFallbackReason?: string;
   pinnedSummary?: string; // First quality summary, pinned for display stability
   userPrompt?: string; // Prompt used when spawning without a tracker issue
   /**
@@ -1905,8 +1978,6 @@ export interface PortfolioProject {
   configPath: string;                  // Absolute path to agent-orchestrator.yaml
   configProjectKey: string;            // Key in config.projects map
   repoPath: string;                    // Absolute local filesystem path
-  storageKey?: string;                 // Persisted storage hash — stable across directory moves
-  originUrl?: string;                  // Canonical git origin URL associated with the storage identity
   repo?: string;                       // "owner/repo" for SCM
   defaultBranch?: string;
   sessionPrefix: string;
