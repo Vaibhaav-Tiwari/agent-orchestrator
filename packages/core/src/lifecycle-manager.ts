@@ -2665,7 +2665,13 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         source: "report-watcher",
         kind: "report_watcher.triggered",
         level: "warn",
-        summary: `${auditResult.trigger}: ${auditResult.message}`,
+        // Trigger is a bounded enum (no_acknowledge | stale_report |
+        // agent_needs_input); auditResult.message includes free-form
+        // report.note text from `ao report` and must not land in summary,
+        // which is FTS-indexed and only truncated by sanitizeSummary.
+        // Full message stays in `data.message` where sanitizeData redacts
+        // credential URLs.
+        summary: `${auditResult.trigger} triggered`,
         data: {
           trigger: auditResult.trigger,
           message: auditResult.message,

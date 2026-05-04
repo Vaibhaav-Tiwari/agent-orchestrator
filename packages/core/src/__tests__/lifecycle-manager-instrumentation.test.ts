@@ -865,6 +865,69 @@ describe("report_watcher.triggered", () => {
       vi.useRealTimers();
     }
   });
+
+  it("REGRESSION: summary must not interpolate auditResult.message (report.note credential leak)", async () => {
+    // `auditResult.message` for the agent_needs_input trigger embeds the
+    // free-form `report.note` supplied via `ao report --note "..."`. Since
+    // sanitizeSummary only truncates and FTS5 indexes summary, a note that
+    // happens to contain a credential URL becomes persistently searchable
+    // from the DB. Summary must stay generic; the message stays in `data`
+    // where sanitizeData redacts credentials.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2025-01-01T12:00:00.000Z"));
+
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: createMockSCM(),
+      notifier: createMockNotifier(),
+    });
+
+    // Seed a needs_input report whose note contains a credential URL.
+    // Per agent-report.ts:560, readAgentReport pulls these out of metadata.
+    const credentialNote = "stuck on git push https://x-oauth-basic:SECRET_NOTE_TOKEN@github.com/foo/bar.git";
+    const blockedSession = makeSession({
+      id: "app-1",
+      status: "working",
+      workspacePath: null,
+      createdAt: new Date("2025-01-01T11:55:00.000Z"),
+      metadata: { createdAt: "2025-01-01T11:55:00.000Z" },
+    });
+    persistSession("app-1", blockedSession, {
+      createdAt: "2025-01-01T11:55:00.000Z",
+      agentReportedState: "needs_input",
+      agentReportedAt: "2025-01-01T11:58:00.000Z",
+      agentReportedNote: credentialNote,
+    });
+
+    const lm = createLifecycleManager({
+      config,
+      registry,
+      sessionManager: mockSessionManager,
+    });
+
+    try {
+      await lm.check("app-1");
+
+      const events = vi
+        .mocked(recordActivityEvent)
+        .mock.calls.map((c) => c[0])
+        .filter((c) => c.kind === "report_watcher.triggered");
+      expect(events.length).toBeGreaterThan(0);
+      expect(events[0]!.data).toMatchObject({ trigger: "agent_needs_input" });
+
+      // Summary stays generic — no secret material from report.note.
+      expect(events[0]!.summary).not.toContain("SECRET_NOTE_TOKEN");
+      expect(events[0]!.summary).not.toContain("x-oauth-basic");
+
+      // The full message still surfaces via `data` where sanitizeData runs.
+      expect(events[0]!.data).toMatchObject({
+        message: expect.stringContaining("Agent needs input"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
