@@ -488,6 +488,48 @@ describe("reaction.escalated", () => {
       escalationCause: "max_retries",
     });
   });
+
+  it("REGRESSION: escalationCause=max_attempts when numeric escalateAfter triggers (no retries cfg)", async () => {
+    // Numeric escalateAfter is an attempt-count gate, not a duration. Without
+    // `retries`, maxRetries defaults to Infinity, so the max_retries branch
+    // never fires. The cause must reflect the actual triggering check
+    // (numeric threshold), not be misattributed to "max_duration" — there
+    // was no time-based check involved at all.
+    config.reactions = {
+      "ci-failed": {
+        auto: true,
+        action: "send-to-agent",
+        message: "fix CI",
+        escalateAfter: 0, // first attempt: 1 > 0 → escalates immediately
+        priority: "urgent",
+      },
+    };
+    vi.mocked(mockSessionManager.send).mockResolvedValue(undefined);
+
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: makeCiFailedScm(),
+      notifier: createMockNotifier(),
+    });
+
+    const session = makeSession({ status: "pr_open", pr: makeMatchingPR() });
+    persistSession("app-1", session);
+
+    const lm = buildLM(registry);
+    await lm.check("app-1");
+
+    const events = vi
+      .mocked(recordActivityEvent)
+      .mock.calls.map((c) => c[0])
+      .filter((c) => c.kind === "reaction.escalated");
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toMatchObject({
+      reactionKey: "ci-failed",
+      attempts: 1,
+      escalationCause: "max_attempts",
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -624,6 +666,56 @@ describe("lifecycle.poll_failed", () => {
       expect(events.length).toBeGreaterThan(0);
       expect(events[0]!.level).toBe("error");
       expect(events[0]!.data).toMatchObject({ errorMessage: "storage unreadable" });
+    } finally {
+      lm.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("REGRESSION: summary must not interpolate raw error text (credential leak via FTS)", async () => {
+    // sanitizeSummary only truncates; sanitizeData (which runs on `data`)
+    // redacts credential URLs. Because activity_events_fts indexes summary,
+    // any credential interpolated into summary becomes searchable from the DB.
+    // Lifecycle code must keep summary generic and put error reasons in `data`.
+    vi.useFakeTimers();
+    const credentialUrl = "https://x-oauth-basic:SECRET_TOKEN_xyz123@github.com/foo/bar.git";
+    vi.mocked(mockSessionManager.list).mockRejectedValue(
+      new Error(`fatal: unable to access '${credentialUrl}/'`),
+    );
+
+    const registry = createMockRegistry({
+      runtime: plugins.runtime,
+      agent: plugins.agent,
+      scm: createMockSCM(),
+      notifier: createMockNotifier(),
+    });
+
+    const lm = createLifecycleManager({
+      config,
+      registry,
+      sessionManager: mockSessionManager,
+      projectId: "my-app",
+    });
+
+    try {
+      lm.start(60_000);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      const events = vi
+        .mocked(recordActivityEvent)
+        .mock.calls.map((c) => c[0])
+        .filter((c) => c.kind === "lifecycle.poll_failed");
+      expect(events.length).toBeGreaterThan(0);
+
+      // Summary stays generic — no secret material.
+      expect(events[0]!.summary).not.toContain("SECRET_TOKEN");
+      expect(events[0]!.summary).not.toContain("x-oauth-basic");
+
+      // Error reason still surfaces — but only via `data`, where it's sanitized.
+      expect(events[0]!.data).toMatchObject({
+        errorMessage: expect.stringContaining("unable to access"),
+      });
     } finally {
       lm.stop();
       vi.useRealTimers();

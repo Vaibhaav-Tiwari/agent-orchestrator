@@ -1402,8 +1402,15 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     }
 
     if (shouldEscalate) {
-      const escalationCause: "max_retries" | "max_duration" =
-        tracker.attempts > maxRetries ? "max_retries" : "max_duration";
+      // Mirror the trigger checks above so the cause matches the gate that
+      // actually fired. Numeric escalateAfter is an attempt-count gate, not a
+      // duration; without this distinction it gets misattributed to max_duration.
+      const escalationCause: "max_retries" | "max_attempts" | "max_duration" =
+        tracker.attempts > maxRetries
+          ? "max_retries"
+          : typeof escalateAfter === "number" && tracker.attempts > escalateAfter
+            ? "max_attempts"
+            : "max_duration";
       recordActivityEvent({
         projectId,
         sessionId,
@@ -2801,7 +2808,11 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
         source: "lifecycle",
         kind: "lifecycle.poll_failed",
         level: "error",
-        summary: `poll cycle failed: ${errorReason}`,
+        // Keep summary generic — sanitizeSummary only truncates, but the FTS
+        // index covers it. Error text (which can contain credential URLs from
+        // git/gh subprocess output) is routed through `data` where sanitizeData
+        // redacts credentials.
+        summary: "poll cycle failed",
         data: {
           errorMessage: errorReason,
           durationMs: Date.now() - startedAt,
