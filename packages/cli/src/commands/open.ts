@@ -91,7 +91,7 @@ export function registerOpen(program: Command): void {
       // live sessions. For a named lookup the user is asking about a specific
       // session, so we keep terminated ones in scope and open the dashboard
       // so they can read the transcript even if the agent has died.
-      let sessionsToOpen: Session[] = [];
+      let sessionsToOpen: Session[];
 
       if (!target || target === "all") {
         sessionsToOpen = all.filter((s) => !isTerminalSession(s));

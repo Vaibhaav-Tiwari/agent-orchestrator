@@ -1,3 +1,4 @@
+import type * as ChildProcess from "node:child_process";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const {
@@ -21,7 +22,7 @@ const {
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+  const actual = await importOriginal<typeof ChildProcess>();
   return { ...actual, spawn: mockSpawn };
 });
 
