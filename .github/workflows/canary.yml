@@ -13,11 +13,13 @@ concurrency:
 permissions:
   contents: read
   pull-requests: write
+  id-token: write
 
 jobs:
   canary:
     name: Publish canary
     runs-on: ubuntu-latest
+    environment: release
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
@@ -82,6 +84,7 @@ jobs:
           echo "version=$CANARY_VERSION" >> "$GITHUB_OUTPUT"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
 
       - name: Comment on merged PR
         if: steps.check_sha.outputs.skip == 'false' && steps.publish.outcome == 'success'
