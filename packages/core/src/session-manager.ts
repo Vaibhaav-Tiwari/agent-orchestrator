@@ -50,6 +50,7 @@ import {
   type CanonicalSessionLifecycle,
   PR_STATE,
 } from "./types.js";
+import { perfTime } from "./perf.js";
 import {
   readMetadataRaw,
   writeMetadata,
@@ -1025,7 +1026,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       session.status !== "spawning"
     ) {
       try {
-        const alive = await plugins.runtime.isAlive(session.runtimeHandle);
+        const alive = await perfTime(`sm:${session.id}`, "sm.runtime.isAlive", () =>
+          plugins.runtime!.isAlive(session.runtimeHandle!),
+          { runtime: session.runtimeHandle.runtimeName },
+        );
         if (!alive) {
           session.lifecycle.runtime.state = "missing";
           session.lifecycle.runtime.reason =
@@ -1068,7 +1072,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     session.activitySignal = createActivitySignal("unavailable");
     if (plugins.agent) {
       try {
-        const detected = await plugins.agent.getActivityState(session, config.readyThresholdMs);
+        const detected = await perfTime(`sm:${session.id}`, "sm.agent.getActivityState", () =>
+          plugins.agent!.getActivityState(session, config.readyThresholdMs),
+          { agent: session.agent ?? "unknown" },
+        );
         if (detected !== null) {
           session.activitySignal = classifyActivitySignal(detected, "native");
           session.activity = detected.state;
@@ -1088,7 +1095,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // Enrich with live agent session info (summary, cost).
       let info: Awaited<ReturnType<Agent["getSessionInfo"]>>;
       try {
-        info = await plugins.agent.getSessionInfo(session);
+        info = await perfTime(`sm:${session.id}`, "sm.agent.getSessionInfo", () =>
+          plugins.agent!.getSessionInfo(session),
+          { agent: session.agent ?? "unknown" },
+        );
       } catch {
         // Can't get session info — keep existing values
         info = null;
@@ -2063,13 +2073,15 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       const selection = resolveSelectionForSession(project, sessionId, repaired.raw);
       const effectiveAgentName = selection.agentName;
       const plugins = resolvePlugins(project, effectiveAgentName);
-      await ensureHandleAndEnrich(
-        session,
-        sessionId,
-        sessionsDir,
-        project,
-        effectiveAgentName,
-        plugins,
+      await perfTime(`sm:${sessionId}`, "sm.ensureHandleAndEnrich", () =>
+        ensureHandleAndEnrich(
+          session,
+          sessionId,
+          sessionsDir,
+          project,
+          effectiveAgentName,
+          plugins,
+        ),
       );
 
       return session;

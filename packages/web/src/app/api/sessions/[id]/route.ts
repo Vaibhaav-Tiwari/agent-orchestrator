@@ -1,5 +1,10 @@
 import { type NextRequest } from "next/server";
-import { getProjectSessionsDir, readAgentReportAuditTrailAsync } from "@aoagents/ao-core";
+import {
+  getProjectSessionsDir,
+  readAgentReportAuditTrailAsync,
+  perfMark,
+  perfTime,
+} from "@aoagents/ao-core";
 import { getServices } from "@/lib/services";
 import {
   sessionToDashboard,
@@ -18,10 +23,11 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const startedAt = Date.now();
   try {
     const { id } = await params;
-    const { config, registry, sessionManager } = await getServices();
+    const { config, registry, sessionManager } = await perfTime(correlationId, "server.getServices", () => getServices());
 
-    const coreSession = await sessionManager.get(id);
+    const coreSession = await perfTime(correlationId, "server.sm.get", () => sessionManager.get(id), { id });
     if (!coreSession) {
+      perfMark(correlationId, "server.total", Date.now() - startedAt, { outcome: "404" });
       return jsonWithCorrelation({ error: "Session not found" }, { status: 404 }, correlationId);
     }
 
@@ -32,19 +38,22 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       const auditPromise = readAgentReportAuditTrailAsync(sessionsDir, coreSession.id).then((audit) => {
         dashboardSession.agentReportAudit = audit;
       });
-      await settlesWithin(auditPromise, AGENT_REPORT_AUDIT_TIMEOUT_MS);
+      await perfTime(correlationId, "server.audit", () => settlesWithin(auditPromise, AGENT_REPORT_AUDIT_TIMEOUT_MS));
     }
 
     // Enrich metadata (issue labels, agent summaries, issue titles)
-    await settlesWithin(
-      enrichSessionsMetadata([coreSession], [dashboardSession], config, registry),
-      METADATA_ENRICH_TIMEOUT_MS,
+    await perfTime(correlationId, "server.enrichMetadata", () =>
+      settlesWithin(
+        enrichSessionsMetadata([coreSession], [dashboardSession], config, registry, correlationId),
+        METADATA_ENRICH_TIMEOUT_MS,
+      ),
     );
 
     // Enrich PR from session metadata (written by CLI lifecycle)
     if (coreSession.pr) {
       enrichSessionPR(dashboardSession);
     }
+    perfMark(correlationId, "server.total", Date.now() - startedAt, { outcome: "200" });
 
     recordApiObservation({
       config,

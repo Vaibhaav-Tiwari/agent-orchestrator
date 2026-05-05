@@ -8,6 +8,9 @@
 // Types — everything plugins and consumers need
 export * from "./types.js";
 
+// Perf tracing — temporary, AO_PERF=1 gated
+export { PERF_ON, perfMark, perfTime, perfTimeSync, perfCid } from "./perf.js";
+
 // Config — YAML loader + validation
 export {
   loadConfig,

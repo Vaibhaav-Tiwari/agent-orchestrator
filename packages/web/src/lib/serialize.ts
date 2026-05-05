@@ -17,6 +17,7 @@ import {
   type ProjectConfig,
   type OrchestratorConfig,
   type PluginRegistry,
+  perfMark,
 } from "@aoagents/ao-core";
 import {
   type DashboardSession,
@@ -565,7 +566,9 @@ export async function enrichSessionsMetadata(
   dashboardSessions: DashboardSession[],
   config: OrchestratorConfig,
   registry: PluginRegistry,
+  cid?: string,
 ): Promise<void> {
+  const traceCid = cid ?? "enrich";
   const { projects, summaryPromises } = prepareSessionMetadataEnrichment(
     coreSessions,
     dashboardSessions,
@@ -584,7 +587,20 @@ export async function enrichSessionsMetadata(
     return enrichSessionIssueTitle(dashboardSessions[i], tracker, project);
   });
 
-  await Promise.allSettled([...summaryPromises, ...issueTitlePromises]);
+  // Time each leg independently while still running them concurrently.
+  const t0 = Date.now();
+  const timed = <T>(label: string, ps: Promise<T>[]): Promise<PromiseSettledResult<T>[]> => {
+    const start = Date.now();
+    return Promise.allSettled(ps).then((r) => {
+      perfMark(traceCid, label, Date.now() - start, { count: ps.length });
+      return r;
+    });
+  };
+  await Promise.all([
+    timed("enrich.agentSummary", summaryPromises),
+    timed("enrich.issueTitle", issueTitlePromises),
+  ]);
+  perfMark(traceCid, "enrich.total", Date.now() - t0, { sessions: coreSessions.length });
 }
 
 /** Compute dashboard stats from a list of sessions. */
