@@ -104,8 +104,13 @@ function pruneOldEvents(db: ReturnType<typeof getDb>, cutoff: number): void {
 
 // Patterns that indicate sensitive field names
 const SENSITIVE_KEY_RE = /token|password|secret|authorization|cookie|api[-_]?key/i;
-// URL credentials: https://token@host or http://user:pass@host
-const CREDENTIAL_URL_RE = /https?:\/\/[^@\s]+@/gi;
+// URL credentials: https://token@host or http://user:pass@host.
+// Excluding `/` from the userinfo class is both semantically correct (RFC 3986
+// userinfo can't contain unencoded `/`) AND prevents the polynomial-regex
+// (ReDoS) backtracking that the unbounded `[^@\s]+` allowed on inputs like
+// `http://http://http://...` with no terminating `@`. Length cap is a belt-
+// and-braces guard against pathological inputs.
+const CREDENTIAL_URL_RE = /https?:\/\/[^@\s/]{1,200}@/gi;
 
 // Per-string-value cap. The whole-data 16 KB cap still applies on top of this;
 // truncating individual strings limits blast radius if a pattern below misses a

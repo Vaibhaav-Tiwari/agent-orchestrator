@@ -345,4 +345,22 @@ describe("recordActivityEvent", () => {
     expect(attempts[1]!["error"]).toContain("[redacted]");
     expect(attempts[1]!["error"]).not.toContain("ghp_abc");
   });
+
+  it("REGRESSION: CREDENTIAL_URL_RE doesn't ReDoS on attacker-shaped input (CodeQL alert)", () => {
+    // CodeQL flagged the original pattern `[^@\s]+@` as polynomial: an input
+    // like `http://http://http://...` with no terminating @ caused O(n²)
+    // backtracking. Excluding `/` from the userinfo class + length cap fixes
+    // both the false positive (URL userinfo can't contain `/` per RFC 3986)
+    // and the perf cliff. This test runs a 16KB pathological input through
+    // the full sanitize pipeline and asserts it completes in <100ms.
+    const pathological = "http://".repeat(2000); // ~14KB, ~2000 prefix repetitions, no @
+    const start = Date.now();
+    const out = recordAndCaptureData({ errorMessage: pathological });
+    const elapsed = Date.now() - start;
+    // Generous bound — the fixed regex should complete in single-digit ms.
+    // Pre-fix this input took multiple seconds.
+    expect(elapsed).toBeLessThan(100);
+    // No `@` in input → no replacement should occur (other than length cap).
+    expect((out["errorMessage"] as string).length).toBeLessThanOrEqual(500);
+  });
 });
