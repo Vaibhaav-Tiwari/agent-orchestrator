@@ -1,0 +1,180 @@
+/**
+ * DAG-aware scheduling for the pipeline reducer.
+ *
+ * Pure: every function takes timestamps as parameters; no clock reads, no I/O.
+ * Split out from reducer-helpers.ts so the reducer can stay focused on
+ * event-shape transitions while the dependency / routing logic lives here.
+ *
+ * Ordering invariants (what callers can rely on):
+ *  - Skips cascade in a single pass: skipping a stage may make a downstream
+ *    stage's routes evaluate to false, which marks it skipped, which may
+ *    cascade further. `scheduleAfterChange` runs the cascade to fixpoint
+ *    before emitting any START_STAGE effects.
+ *  - Stage declaration order is preserved as priority for slotting: when more
+ *    stages are eligible than `maxConcurrentStages` allows, earlier-declared
+ *    stages win the available slots. This keeps linear pipelines (no
+ *    `dependsOn`) behaviorally identical to v0.
+ */
+
+import type { PipelineEffect } from "./events.js";
+import { iso, patchRun } from "./reducer-helpers.js";
+import {
+  type RunState,
+  type Stage,
+  type StageRoutePredicate,
+  type StageState,
+  isTerminalStageStatus,
+} from "./types.js";
+
+export interface ScheduleResult {
+  /** Run with any newly-skipped stages applied. May equal the input run. */
+  run: RunState;
+  /** START_STAGE effects for stages eligible to run, capped by concurrency. */
+  startEffects: PipelineEffect[];
+  /** Stage names that transitioned `pending → skipped` during this call. */
+  newlySkipped: string[];
+  /** True iff every stage is in a terminal status. */
+  allTerminal: boolean;
+}
+
+/**
+ * After a state change (TRIGGER_FIRED, STAGE_COMPLETED, RUN_RESUMED), figure
+ * out which pending stages should be skipped (routes predicate failed) and
+ * which are eligible to start. Cascade skips run to fixpoint before emitting
+ * any START_STAGE effects, so downstream stages whose dependencies were just
+ * skipped get marked skipped in the same reducer step.
+ */
+export function scheduleAfterChange(run: RunState, now: number): ScheduleResult {
+  const skipResult = applyEligibleSkips(run, now);
+  const current = skipResult.run;
+
+  const max = current.pipelineConfigSnapshot.maxConcurrentStages ?? 1;
+  const inflight = Object.values(current.stages).filter((s) => s.status === "running").length;
+  const slots = Math.max(0, max - inflight);
+
+  const startEffects: PipelineEffect[] = [];
+  if (slots > 0) {
+    for (const stageDef of current.pipelineConfigSnapshot.stages) {
+      if (startEffects.length >= slots) break;
+      const state = current.stages[stageDef.name];
+      if (state.status !== "pending") continue;
+      if (!areDepsSatisfiedForStart(stageDef, current.stages)) continue;
+      if (!evaluateRoutes(stageDef, current.stages)) continue;
+      startEffects.push({
+        type: "START_STAGE",
+        runId: current.runId,
+        stageRunId: state.stageRunId,
+        stage: stageDef,
+      });
+    }
+  }
+
+  const allTerminal = Object.values(current.stages).every((s) => isTerminalStageStatus(s.status));
+  return { run: current, startEffects, newlySkipped: skipResult.newlySkipped, allTerminal };
+}
+
+/**
+ * Walk the pipeline and mark as `skipped` every pending stage whose:
+ *  - preconditions (`dependsOn` ∪ `routes` refs) are all in a terminal
+ *    state — only then is the activation decision deterministic, AND
+ *  - `routes` predicate evaluates to `false` (or — when `routes` is unset —
+ *    any `dependsOn` reached a non-`succeeded` terminal state).
+ *
+ * Iterates to fixpoint so cascade skips land in one reducer step.
+ *
+ * Note: `routes` may reference stages outside `dependsOn` (e.g. a parallel
+ * branch the user wants to react to without forcing serialization). The
+ * scheduler waits for those references to be terminal too before deciding.
+ */
+function applyEligibleSkips(run: RunState, now: number): { run: RunState; newlySkipped: string[] } {
+  let current = run;
+  const newlySkipped: string[] = [];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const stageDef of current.pipelineConfigSnapshot.stages) {
+      const state = current.stages[stageDef.name];
+      if (state.status !== "pending") continue;
+      if (!arePreconditionsTerminal(stageDef, current.stages)) continue;
+
+      const shouldSkip = stageDef.routes
+        ? !evaluatePredicate(stageDef.routes.when, current.stages)
+        : !areAllDepsSucceeded(stageDef, current.stages);
+
+      if (shouldSkip) {
+        const skippedStage: StageState = {
+          ...state,
+          status: "skipped",
+          completedAt: iso(now),
+        };
+        current = patchRun(current, { [stageDef.name]: skippedStage }, now);
+        newlySkipped.push(stageDef.name);
+        changed = true;
+      }
+    }
+  }
+  return { run: current, newlySkipped };
+}
+
+function arePreconditionsTerminal(stage: Stage, stages: Record<string, StageState>): boolean {
+  if (!areDepsTerminal(stage, stages)) return false;
+  if (stage.routes) {
+    for (const ref of stage.routes.when.stages) {
+      const refState = stages[ref];
+      if (!refState || !isTerminalStageStatus(refState.status)) return false;
+    }
+  }
+  return true;
+}
+
+function areDepsTerminal(stage: Stage, stages: Record<string, StageState>): boolean {
+  const deps = stage.dependsOn ?? [];
+  for (const dep of deps) {
+    const depState = stages[dep];
+    if (!depState || !isTerminalStageStatus(depState.status)) return false;
+  }
+  return true;
+}
+
+function areAllDepsSucceeded(stage: Stage, stages: Record<string, StageState>): boolean {
+  const deps = stage.dependsOn ?? [];
+  for (const dep of deps) {
+    const depState = stages[dep];
+    if (!depState || depState.status !== "succeeded") return false;
+  }
+  return true;
+}
+
+/**
+ * Eligible-to-start: every `dependsOn` must be `succeeded` (default) so the
+ * scheduler doesn't optimistically start a stage whose upstream skipped or
+ * failed. Routes are evaluated separately by `evaluateRoutes`.
+ */
+function areDepsSatisfiedForStart(stage: Stage, stages: Record<string, StageState>): boolean {
+  return areAllDepsSucceeded(stage, stages);
+}
+
+function evaluateRoutes(stage: Stage, stages: Record<string, StageState>): boolean {
+  if (!stage.routes) return true;
+  return evaluatePredicate(stage.routes.when, stages);
+}
+
+/**
+ * Pure predicate evaluator over the runtime stage states. Stages referenced
+ * here are guaranteed by config validation to exist in the pipeline; missing
+ * entries are treated as non-terminal (i.e. `false` for everything except
+ * `anyFailed` short-circuits) so an unevaluable predicate never green-lights.
+ */
+function evaluatePredicate(
+  predicate: StageRoutePredicate,
+  stages: Record<string, StageState>,
+): boolean {
+  switch (predicate.kind) {
+    case "allSucceeded":
+      return predicate.stages.every((name) => stages[name]?.status === "succeeded");
+    case "anySucceeded":
+      return predicate.stages.some((name) => stages[name]?.status === "succeeded");
+    case "anyFailed":
+      return predicate.stages.some((name) => stages[name]?.status === "failed");
+  }
+}

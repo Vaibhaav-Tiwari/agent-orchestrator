@@ -88,25 +88,6 @@ export function materializeArtifact(
   } as Artifact;
 }
 
-export function startableStageEffects(run: RunState): PipelineEffect[] {
-  const max = run.pipelineConfigSnapshot.maxConcurrentStages ?? 1;
-  const inflight = Object.values(run.stages).filter((s) => s.status === "running").length;
-  const remaining = Math.max(0, max - inflight);
-  if (remaining === 0) return [];
-
-  const pending = run.pipelineConfigSnapshot.stages
-    .map((stage) => ({ stage, state: run.stages[stage.name] }))
-    .filter(({ state }) => state.status === "pending")
-    .slice(0, remaining);
-
-  return pending.map(({ stage, state }) => ({
-    type: "START_STAGE" as const,
-    runId: run.runId,
-    stageRunId: state.stageRunId,
-    stage,
-  }));
-}
-
 export function invalidTransition(state: EngineState, message: string): ReducerResult {
   return {
     state,

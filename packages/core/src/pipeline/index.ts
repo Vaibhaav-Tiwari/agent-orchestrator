@@ -25,6 +25,8 @@ export {
   validatePipelineAgentModes,
 } from "./validation.js";
 
+export { scheduleAfterChange, type ScheduleResult } from "./dag.js";
+
 export { buildStagePrompt, type StagePromptInput } from "./stage-prompt.js";
 
 export {
