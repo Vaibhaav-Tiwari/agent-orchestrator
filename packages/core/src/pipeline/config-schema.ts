@@ -12,6 +12,7 @@
 
 import { z } from "zod";
 
+import { findFirstStageCycle } from "./dag.js";
 import {
   asPipelineId,
   type Pipeline,
@@ -180,74 +181,6 @@ export const ConfiguredPipelineSchema = z
       });
     }
   });
-
-/**
- * Find the first cycle in the combined `dependsOn` + `routes.when.stages`
- * graph and return it as `[stage, ..., stage]` (first and last names equal).
- * Trivial self-loops (`[X, X]`) are excluded so the explicit self-reference
- * checks own that error message; multi-node cycles are reported here.
- *
- * Iterative DFS — pure, allocation-bounded, suitable for running inside Zod
- * refinements at config load. Both edge types contribute because the runtime
- * scheduler waits for either kind of reference before evaluating a stage, so
- * a cycle in either graph deadlocks the run.
- */
-function findFirstStageCycle(
-  stages: Array<{
-    name: string;
-    dependsOn?: string[];
-    routes?: { when: { stages: string[] } };
-  }>,
-): string[] | null {
-  const adjacency = new Map<string, string[]>();
-  for (const stage of stages) {
-    const edges = new Set<string>([
-      ...(stage.dependsOn ?? []),
-      ...(stage.routes?.when.stages ?? []),
-    ]);
-    adjacency.set(stage.name, [...edges]);
-  }
-  const WHITE = 0;
-  const GRAY = 1;
-  const BLACK = 2;
-  const color = new Map<string, number>();
-  for (const stage of stages) color.set(stage.name, WHITE);
-
-  for (const stage of stages) {
-    if (color.get(stage.name) !== WHITE) continue;
-    const stack: Array<{ node: string; iter: number }> = [{ node: stage.name, iter: 0 }];
-    const path: string[] = [];
-    color.set(stage.name, GRAY);
-    path.push(stage.name);
-
-    while (stack.length > 0) {
-      const top = stack[stack.length - 1];
-      const neighbors = adjacency.get(top.node) ?? [];
-      if (top.iter >= neighbors.length) {
-        color.set(top.node, BLACK);
-        stack.pop();
-        path.pop();
-        continue;
-      }
-      const next = neighbors[top.iter];
-      top.iter += 1;
-      const nextColor = color.get(next);
-      if (nextColor === GRAY) {
-        const cycleStart = path.indexOf(next);
-        // Skip trivial self-loops; the explicit self-reference checks above
-        // already produced a clearer error for those.
-        if (cycleStart === path.length - 1) continue;
-        return [...path.slice(cycleStart), next];
-      }
-      if (nextColor === WHITE) {
-        color.set(next, GRAY);
-        path.push(next);
-        stack.push({ node: next, iter: 0 });
-      }
-    }
-  }
-  return null;
-}
 
 export type ConfiguredPipeline = z.infer<typeof ConfiguredPipelineSchema>;
 

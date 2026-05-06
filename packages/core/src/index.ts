@@ -402,6 +402,10 @@ export {
   AgentExecutorSpawnError,
   STAGE_FINDINGS_RELATIVE_PATH,
   createPipelineEngine,
+  // v1.1: DAG scheduler + runtime validation defense-in-depth
+  findFirstStageCycle,
+  scheduleAfterChange,
+  validatePipelineDag,
   // Pipeline config schema (`pipelines:` block)
   ConfiguredPipelineSchema,
   PipelinesConfigSchema,

@@ -23,6 +23,7 @@ import {
   loopKey,
   reduce,
   validatePipelineAgentModes,
+  validatePipelineDag,
   type Artifact,
   type ConfiguredPipeline,
   type EngineState,
@@ -281,6 +282,7 @@ export function triggerRun(
   now: () => number = Date.now,
 ): RunId {
   validatePipelineAgentModes(pipeline, registry);
+  validatePipelineDag(pipeline);
 
   const sessionId = options.sessionId ?? `pipeline.${pipeline.name}`;
   const initialState = hydrateEngineState(store);

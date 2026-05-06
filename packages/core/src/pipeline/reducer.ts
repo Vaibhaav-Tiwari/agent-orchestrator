@@ -393,6 +393,26 @@ function reduceRunResumed(state: EngineState, event: RunResumedEvent): ReducerRe
     };
   }
 
+  // Also revive any stages that `terminateRunFromState` cascade-skipped when
+  // the run failed — they never got an execution attempt, so they keep their
+  // existing stageRunId and attempt counter. Without this, a failure in a
+  // DAG would permanently lose every downstream branch on resume because
+  // `scheduleAfterChange` only considers `pending` stages.
+  //
+  // `scheduleAfterChange` runs after this delta is applied, so any stage
+  // whose `routes` predicate is genuinely unsatisfied gets re-skipped — we
+  // don't accidentally revive predicate-driven skips.
+  for (const [name, prior] of Object.entries(run.stages)) {
+    if (prior.status !== "skipped") continue;
+    if (stageDelta[name]) continue;
+    stageDelta[name] = {
+      stageRunId: prior.stageRunId,
+      status: "pending",
+      attempt: prior.attempt,
+      artifacts: prior.artifacts,
+    };
+  }
+
   const updatedRun: RunState = {
     ...run,
     stages: { ...run.stages, ...stageDelta },

@@ -23,9 +23,10 @@ export {
   PipelineConfigError,
   getSupportedTaskModes,
   validatePipelineAgentModes,
+  validatePipelineDag,
 } from "./validation.js";
 
-export { scheduleAfterChange, type ScheduleResult } from "./dag.js";
+export { findFirstStageCycle, scheduleAfterChange, type ScheduleResult } from "./dag.js";
 
 export { buildStagePrompt, type StagePromptInput } from "./stage-prompt.js";
 

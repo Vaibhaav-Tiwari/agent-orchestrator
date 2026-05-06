@@ -95,7 +95,9 @@ describe("pipeline DAG — cycle detection (config load)", () => {
     expect(messages).toContain("a → b → a");
   });
 
-  it("rejects a 3-cycle with a clear path", () => {
+  it("rejects a 3-cycle with the exact path in declaration order", () => {
+    // Adjacency: a→c, b→a, c→b. DFS from `a` (first-declared) traces
+    // a→c→b→a, so the reported cycle path is exact, not just "contains a, b, c".
     const result = ConfiguredPipelineSchema.safeParse({
       stages: [
         { ...makeStage("a"), dependsOn: ["c"] },
@@ -106,7 +108,7 @@ describe("pipeline DAG — cycle detection (config load)", () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     const messages = result.error.issues.map((i) => i.message).join("\n");
-    expect(messages).toMatch(/stage dependency cycle.*a.*c|c.*b.*a/);
+    expect(messages).toContain("stage dependency cycle: a → c → b → a");
   });
 
   it("rejects routes-only cycles (would deadlock at runtime)", () => {
@@ -472,5 +474,131 @@ describe("pipeline DAG — multi-pipeline support", () => {
     if (result.success) return;
     const messages = result.error.issues.map((i) => i.message).join("\n");
     expect(messages).toContain("stage dependency cycle");
+  });
+});
+
+describe("pipeline DAG — failure path (parallel)", () => {
+  it("STAGE_FAILED on a parallel branch terminates the run and marks sibling stages outdated/skipped", () => {
+    // Two independent branches running concurrently; the running sibling
+    // should transition `running → outdated` and emit a CANCEL_STAGE effect,
+    // while a not-yet-started downstream stage transitions `pending → skipped`.
+    const pipeline = makePipeline(
+      [
+        makeStage("a"),
+        makeStage("b"),
+        { ...makeStage("c"), dependsOn: ["a"] },
+      ],
+      2,
+    );
+    const triggered = fireTrigger(pipeline);
+    let s = startStage(triggered.state, asRunId("run-1"), "a", NOW + 1).state;
+    s = startStage(s, asRunId("run-1"), "b", NOW + 2).state;
+    const failed = reduce(s, {
+      type: "STAGE_FAILED",
+      now: NOW + 3,
+      runId: asRunId("run-1"),
+      stageName: "a",
+      errorMessage: "boom",
+    });
+
+    const run = failed.state.runs[asRunId("run-1")];
+    expect(run.loopState).toBe("stalled");
+    expect(run.terminationReason).toBe("stage_failure");
+    expect(run.stages.a.status).toBe("failed");
+    expect(run.stages.b.status).toBe("outdated");
+    expect(run.stages.c.status).toBe("skipped");
+
+    const cancelB = failed.effects.find(
+      (e) => e.type === "CANCEL_STAGE" && e.stageName === "b",
+    );
+    expect(cancelB).toBeDefined();
+  });
+});
+
+describe("pipeline DAG — RUN_RESUMED with cascade-skipped stages", () => {
+  it("revives cascade-skipped downstream stages so they can run after retry", () => {
+    // a fails, terminate cascade-skips b (deps=[a]) and c (deps=[b]).
+    // Resume must revive b and c too — otherwise the DAG branch is lost.
+    const pipeline = makePipeline(
+      [
+        makeStage("a"),
+        { ...makeStage("b"), dependsOn: ["a"] },
+        { ...makeStage("c"), dependsOn: ["b"] },
+      ],
+      1,
+    );
+
+    const triggered = fireTrigger(pipeline);
+    const startedA = startStage(triggered.state, asRunId("run-1"), "a", NOW + 1);
+    const failedA = reduce(startedA.state, {
+      type: "STAGE_FAILED",
+      now: NOW + 2,
+      runId: asRunId("run-1"),
+      stageName: "a",
+      errorMessage: "boom",
+    });
+
+    expect(failedA.state.runs[asRunId("run-1")].stages.b.status).toBe("skipped");
+    expect(failedA.state.runs[asRunId("run-1")].stages.c.status).toBe("skipped");
+
+    const resumed = reduce(failedA.state, {
+      type: "RUN_RESUMED",
+      now: NOW + 3,
+      runId: asRunId("run-1"),
+      stageRunIds: { a: asStageRunId("sr-a-2") },
+    });
+    const run = resumed.state.runs[asRunId("run-1")];
+    expect(run.loopState).toBe("running");
+    expect(run.stages.a.status).toBe("pending");
+    expect(run.stages.b.status).toBe("pending");
+    expect(run.stages.c.status).toBe("pending");
+
+    // a is the only startable stage; b and c wait on their dependsOn.
+    const starts = resumed.effects.filter((e) => e.type === "START_STAGE");
+    expect(starts).toHaveLength(1);
+    if (starts[0].type !== "START_STAGE") throw new Error();
+    expect(starts[0].stage.name).toBe("a");
+  });
+
+  it("revived stages still get re-skipped when their routes predicate is unsatisfied", () => {
+    // c had `routes: { anyFailed: [a] }` — it was skipped via routes (not
+    // cascade) before the failure, then double-skipped by terminate. After
+    // resume + a-succeeds, c must re-skip because a no longer matches anyFailed.
+    const pipeline = makePipeline(
+      [
+        makeStage("a"),
+        { ...makeStage("b"), dependsOn: ["a"] },
+        {
+          ...makeStage("c"),
+          dependsOn: ["a"],
+          routes: { when: { kind: "anyFailed", stages: ["a"] } },
+        },
+      ],
+      1,
+    );
+    const triggered = fireTrigger(pipeline);
+    const startedA = startStage(triggered.state, asRunId("run-1"), "a", NOW + 1);
+    // a fails → terminate marks b, c skipped.
+    const failedA = reduce(startedA.state, {
+      type: "STAGE_FAILED",
+      now: NOW + 2,
+      runId: asRunId("run-1"),
+      stageName: "a",
+      errorMessage: "boom",
+    });
+
+    const resumed = reduce(failedA.state, {
+      type: "RUN_RESUMED",
+      now: NOW + 3,
+      runId: asRunId("run-1"),
+      stageRunIds: { a: asStageRunId("sr-a-2") },
+    });
+    const startedRetry = startStage(resumed.state, asRunId("run-1"), "a", NOW + 4);
+    const completed = completeStage(startedRetry.state, asRunId("run-1"), "a", NOW + 5);
+
+    const run = completed.state.runs[asRunId("run-1")];
+    expect(run.stages.a.status).toBe("succeeded");
+    // b ran (deps satisfied, no routes), c re-skipped (anyFailed false).
+    expect(run.stages.c.status).toBe("skipped");
   });
 });

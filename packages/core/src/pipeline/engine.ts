@@ -45,7 +45,7 @@ import {
   type StageRunId,
   type StageTriggerEvent,
 } from "./types.js";
-import { validatePipelineAgentModes } from "./validation.js";
+import { validatePipelineAgentModes, validatePipelineDag } from "./validation.js";
 import {
   type AgentStageExecutor,
   type RunningAgentStage,
@@ -284,6 +284,7 @@ export function createPipelineEngine(deps: PipelineEngineDeps): PipelineEngine {
 
   async function startRun(input: StartRunInput): Promise<RunId> {
     validatePipelineAgentModes(input.pipeline, registry);
+    validatePipelineDag(input.pipeline);
 
     const runId = asRunId(`run-${randomUUID()}`);
     const stageRunIds: Record<string, StageRunId> = {};

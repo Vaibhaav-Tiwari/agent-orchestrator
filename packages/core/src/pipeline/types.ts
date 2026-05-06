@@ -93,6 +93,16 @@ export interface StageBudget {
  *
  * All forms reference stage names within the same pipeline. Validation at
  * config load rejects unknown names; the scheduler trusts the input here.
+ *
+ * **Known limitation in v1.1: `anyFailed` is reachable only via cascade-skip,
+ * not for "run-on-failure" recovery branches.** The reducer terminates the
+ * run as `stalled` immediately on any STAGE_FAILED, so a downstream stage
+ * with `routes.when.kind === "anyFailed"` whose predicate would evaluate
+ * `true` never gets a chance to run — `terminateRunFromState` marks it
+ * `skipped` first. Operators can still use `anyFailed` to express "skip
+ * this stage if any upstream failed" semantics in conjunction with other
+ * predicates, but rollback/cleanup-on-failure stages aren't supported until
+ * failure-tolerant scheduling lands in v1.2/v1.3.
  */
 export type StageRoutePredicate =
   | { kind: "allSucceeded"; stages: string[] }
