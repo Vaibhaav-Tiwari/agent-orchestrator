@@ -86,6 +86,34 @@ export interface StageBudget {
   maxDurationMs?: number;
 }
 
+/**
+ * Hardcoded predicate forms for v1.1. The typed predicate DSL (and richer
+ * `exitPredicates`) lands in v1.3 — this union is intentionally minimal so the
+ * scheduler can ship without committing to a DSL surface yet.
+ *
+ * All forms reference stage names within the same pipeline. Validation at
+ * config load rejects unknown names; the scheduler trusts the input here.
+ *
+ * **Known limitation in v1.1: `anyFailed` is reachable only via cascade-skip,
+ * not for "run-on-failure" recovery branches.** The reducer terminates the
+ * run as `stalled` immediately on any STAGE_FAILED, so a downstream stage
+ * with `routes.when.kind === "anyFailed"` whose predicate would evaluate
+ * `true` never gets a chance to run — `terminateRunFromState` marks it
+ * `skipped` first. Operators can still use `anyFailed` to express "skip
+ * this stage if any upstream failed" semantics in conjunction with other
+ * predicates, but rollback/cleanup-on-failure stages aren't supported until
+ * failure-tolerant scheduling lands in v1.2/v1.3.
+ */
+export type StageRoutePredicate =
+  | { kind: "allSucceeded"; stages: string[] }
+  | { kind: "anySucceeded"; stages: string[] }
+  | { kind: "anyFailed"; stages: string[] };
+
+export interface StageRoutes {
+  /** Evaluated once every referenced upstream stage reaches a terminal state. */
+  when: StageRoutePredicate;
+}
+
 export interface Stage {
   name: string;
   trigger: StageTrigger;
@@ -98,6 +126,19 @@ export interface Stage {
   retries?: number;
   /** Per-stage loop cap (locked decision: not pipeline-global). */
   maxLoopRounds?: number;
+  /**
+   * Stage names this stage waits for before it can be evaluated. Default `[]`.
+   * The named stages must reach a terminal status before the scheduler
+   * considers this stage. Unknown names and cycles are rejected at config load.
+   */
+  dependsOn?: string[];
+  /**
+   * Conditional activation predicate. When set and the predicate evaluates to
+   * `false` (after every referenced upstream stage is terminal), this stage is
+   * marked `skipped` instead of being started. When unset, the default is
+   * "all `dependsOn` stages must have succeeded".
+   */
+  routes?: StageRoutes;
 }
 
 export interface Pipeline {
@@ -166,13 +207,7 @@ export const PIPELINE_FINDINGS_FILENAME = "pipeline-findings.jsonl";
 // Each tier composes upward: a stage exit may cause a run exit, which may cause a
 // loop exit. The reducer is the single point that performs these escalations.
 
-export type StageStatus =
-  | "pending"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "skipped"
-  | "outdated";
+export type StageStatus = "pending" | "running" | "succeeded" | "failed" | "skipped" | "outdated";
 
 export const TERMINAL_STAGE_STATUSES: readonly StageStatus[] = [
   "succeeded",
@@ -191,12 +226,7 @@ export type RunTerminationReason =
   | "outdated"
   | "worker_dead";
 
-export type LoopStateName =
-  | "running"
-  | "awaiting_context"
-  | "done"
-  | "stalled"
-  | "terminated";
+export type LoopStateName = "running" | "awaiting_context" | "done" | "stalled" | "terminated";
 
 export const TERMINAL_LOOP_STATES: readonly LoopStateName[] = [
   "done",

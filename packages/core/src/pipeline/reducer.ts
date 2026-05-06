@@ -12,6 +12,7 @@
  * reducer-helpers.ts.
  */
 
+import { scheduleAfterChange } from "./dag.js";
 import type { PipelineEffect, PipelineEvent, ReducerResult } from "./events.js";
 import {
   deriveLoopStateFromRun,
@@ -20,7 +21,6 @@ import {
   materializeArtifact,
   patchRun,
   replaceRun,
-  startableStageEffects,
   terminateRun,
   terminateRunFromState,
 } from "./reducer-helpers.js";
@@ -36,7 +36,7 @@ import {
   type StageState,
   type StageTriggerEvent,
   type Verdict,
-  isTerminalStageStatus,
+  isTerminalLoopState,
   loopKey,
 } from "./types.js";
 
@@ -92,7 +92,7 @@ function reduceTriggerFired(state: EngineState, event: TriggerFiredEvent): Reduc
   const isContinuation = trigger === "pr.updated" || trigger === "manual";
   const loopRounds = isContinuation ? priorRound + 1 : Math.max(priorRound, 1);
 
-  const runState: RunState = {
+  const initialRunState: RunState = {
     runId,
     pipelineId: pipeline.id,
     pipelineName: pipeline.name,
@@ -105,6 +105,36 @@ function reduceTriggerFired(state: EngineState, event: TriggerFiredEvent): Reduc
     createdAt: iso(now),
     updatedAt: iso(now),
   };
+
+  // Run the DAG scheduler once at trigger time so that:
+  //  - stages whose `routes` reference *no upstream* (vacuous predicates) get
+  //    a single skip decision instead of sitting pending forever, and
+  //  - parallel-startable stages emit START_STAGE in one shot rather than
+  //    waiting for the next reducer step.
+  const sched = scheduleAfterChange(initialRunState, now);
+  const runState = sched.run;
+
+  // Cascade-skipping into a fully-terminal pipeline at trigger time is
+  // possible only with degenerate predicates (e.g. `anyFailed: []`). When it
+  // happens, terminate the run cleanly instead of leaving an orphaned record.
+  if (sched.allTerminal) {
+    const stateWithRun: EngineState = {
+      ...state,
+      runs: { ...state.runs, [runId]: runState },
+      currentRunByLoop: { ...state.currentRunByLoop, [key]: runId },
+    };
+    const preceding: PipelineEffect[] = [
+      {
+        type: "EMIT_OBSERVATION",
+        event: {
+          name: "pipeline.run.created",
+          data: { runId, pipelineName: pipeline.name, sessionId, trigger, headSha, loopRounds },
+        },
+      },
+      ...skipObservations(runState.runId, sched.newlySkipped, runState),
+    ];
+    return terminateRunFromState(stateWithRun, runState, "completed", now, "done", preceding);
+  }
 
   const nextState: EngineState = {
     ...state,
@@ -119,7 +149,7 @@ function reduceTriggerFired(state: EngineState, event: TriggerFiredEvent): Reduc
       runId,
       loopState: deriveLoopStateFromRun(runState, now),
     },
-    ...startableStageEffects(runState),
+    ...sched.startEffects,
     {
       type: "EMIT_OBSERVATION",
       event: {
@@ -134,9 +164,30 @@ function reduceTriggerFired(state: EngineState, event: TriggerFiredEvent): Reduc
         },
       },
     },
+    ...skipObservations(runState.runId, sched.newlySkipped, runState),
   ];
 
   return { state: nextState, effects };
+}
+
+/**
+ * Build "pipeline.stage.terminated" observations for stages that just got
+ * skipped via the DAG scheduler. Mirrors the shape emitted by
+ * `finalizeStageCompletion` so consumers don't need a per-source schema.
+ */
+function skipObservations(runId: RunId, skippedNames: string[], run: RunState): PipelineEffect[] {
+  return skippedNames.map((stageName) => ({
+    type: "EMIT_OBSERVATION" as const,
+    event: {
+      name: "pipeline.stage.terminated",
+      data: {
+        runId,
+        stageName,
+        status: "skipped" as const,
+        artifactCount: run.stages[stageName]?.artifacts.length ?? 0,
+      },
+    },
+  }));
 }
 
 interface StageStartedEvent {
@@ -170,7 +221,17 @@ function reduceStageStarted(state: EngineState, event: StageStartedEvent): Reduc
         type: "EMIT_OBSERVATION",
         event: {
           name: "pipeline.stage.started",
-          data: { runId, stageName, attempt: stage.attempt },
+          // `stageRunId` rotates on every retry/revival, so it's the only
+          // field that uniquely identifies *this* execution. `attempt` is
+          // not enough now that outdated revival keeps the counter
+          // unchanged — two `stage.started` events for the same
+          // (runId, stageName) can otherwise share the same attempt.
+          data: {
+            runId,
+            stageName,
+            stageRunId: stage.stageRunId,
+            attempt: stage.attempt,
+          },
         },
       },
     ],
@@ -303,23 +364,56 @@ function reduceRunResumed(state: EngineState, event: RunResumedEvent): ReducerRe
   const run = state.runs[runId];
   if (!run) return invalidTransition(state, `RUN_RESUMED for unknown runId=${runId}`);
 
+  // Resume only applies to runs that have stopped advancing. The CLI rejects
+  // non-terminal runs at the service layer; this guard catches direct
+  // dispatch (tests, future config-watcher) so the reducer never re-arms a
+  // run the engine still considers active.
+  if (!isTerminalLoopState(run.loopState)) {
+    return invalidTransition(
+      state,
+      `RUN_RESUMED requires a terminal loop state; got ${run.loopState} for ${runId}`,
+    );
+  }
+
+  // Refuse to resume when another run already owns the loop key. Without
+  // this guard, resuming an old stalled run after a fresh trigger has
+  // claimed the loop would silently dispossess the active run of its loop
+  // pointer — NEW_SHA_DETECTED, CONFIG_CHANGED, and the triggerRun guard
+  // would then track the wrong run.
+  const key = loopKey(run.sessionId, run.pipelineName);
+  const activeRunId = state.currentRunByLoop[key];
+  if (activeRunId !== undefined && activeRunId !== runId) {
+    return invalidTransition(
+      state,
+      `RUN_RESUMED for ${runId} but loop "${key}" is already owned by active run ${activeRunId}; cancel that run before resuming the older one`,
+    );
+  }
+
+  // `failed` stages are real retries — bump attempt and consume the
+  // `stage.retries` budget. `outdated` stages were running when an external
+  // event (NEW_SHA_DETECTED, CONFIG_CHANGED, parallel-sibling failure)
+  // forced `terminateRunFromState` to cancel them; that's not a stage
+  // failure, so reviving them must NOT consume the retry cap. They keep
+  // their attempt counter and just get a fresh stageRunId for the next run.
   const failedStageNames = Object.entries(run.stages)
     .filter(([, s]) => s.status === "failed")
     .map(([name]) => name);
-  if (failedStageNames.length === 0) {
+  const outdatedStageNames = Object.entries(run.stages)
+    .filter(([, s]) => s.status === "outdated")
+    .map(([name]) => name);
+  if (failedStageNames.length === 0 && outdatedStageNames.length === 0) {
     // Nothing to resume. Keep the state unchanged so the caller can no-op too.
     return { state, effects: [] };
   }
 
-  // Cap the attempt bump by the configured retries (when set). The reducer
-  // ignores resumes that would exceed retries — operators can still re-cancel
-  // and re-trigger if they want a fresh run.
   const stageRetriesByName = new Map<string, number | undefined>();
   for (const stage of run.pipelineConfigSnapshot.stages) {
     stageRetriesByName.set(stage.name, stage.retries);
   }
 
   const stageDelta: Record<string, StageState> = {};
+
+  // Real retries: bump attempt, check the retries cap.
   for (const name of failedStageNames) {
     const fresh = stageRunIds[name];
     if (!fresh) {
@@ -328,7 +422,6 @@ function reduceRunResumed(state: EngineState, event: RunResumedEvent): ReducerRe
         `RUN_RESUMED missing stageRunId for failed stage "${name}"`,
       );
     }
-
     const prior = run.stages[name];
     const cap = stageRetriesByName.get(name);
     if (cap !== undefined && prior.attempt >= cap + 1) {
@@ -337,12 +430,49 @@ function reduceRunResumed(state: EngineState, event: RunResumedEvent): ReducerRe
         `RUN_RESUMED would exceed stage.retries=${cap} for "${name}" (attempt=${prior.attempt})`,
       );
     }
-
     stageDelta[name] = {
       stageRunId: fresh,
       status: "pending",
       attempt: prior.attempt + 1,
       artifacts: [],
+    };
+  }
+
+  // External cancellations: don't bump attempt, don't check cap.
+  for (const name of outdatedStageNames) {
+    const fresh = stageRunIds[name];
+    if (!fresh) {
+      return invalidTransition(
+        state,
+        `RUN_RESUMED missing stageRunId for outdated stage "${name}"`,
+      );
+    }
+    const prior = run.stages[name];
+    stageDelta[name] = {
+      stageRunId: fresh,
+      status: "pending",
+      attempt: prior.attempt,
+      artifacts: [],
+    };
+  }
+
+  // Also revive any stages that `terminateRunFromState` cascade-skipped when
+  // the run failed — they never got an execution attempt, so they keep their
+  // existing stageRunId and attempt counter. Without this, a failure in a
+  // DAG would permanently lose every downstream branch on resume because
+  // `scheduleAfterChange` only considers `pending` stages.
+  //
+  // `scheduleAfterChange` runs after this delta is applied, so any stage
+  // whose `routes` predicate is genuinely unsatisfied gets re-skipped — we
+  // don't accidentally revive predicate-driven skips.
+  for (const [name, prior] of Object.entries(run.stages)) {
+    if (prior.status !== "skipped") continue;
+    if (stageDelta[name]) continue;
+    stageDelta[name] = {
+      stageRunId: prior.stageRunId,
+      status: "pending",
+      attempt: prior.attempt,
+      artifacts: prior.artifacts,
     };
   }
 
@@ -354,21 +484,28 @@ function reduceRunResumed(state: EngineState, event: RunResumedEvent): ReducerRe
   };
   delete (updatedRun as { terminationReason?: RunTerminationReason }).terminationReason;
 
-  const key = loopKey(run.sessionId, run.pipelineName);
+  // After re-arming failed/outdated stages, run the DAG scheduler so
+  // re-pending stages start in dependsOn order rather than declaration
+  // order. Resumes never terminate the run on their own (we just
+  // transitioned back to `running`), so we ignore `sched.allTerminal`.
+  const sched = scheduleAfterChange(updatedRun, now);
+  const finalRun = sched.run;
+
   const nextState: EngineState = {
     ...state,
-    runs: { ...state.runs, [runId]: updatedRun },
+    runs: { ...state.runs, [runId]: finalRun },
     currentRunByLoop: { ...state.currentRunByLoop, [key]: runId },
   };
 
   const effects: PipelineEffect[] = [
-    { type: "PERSIST_RUN", runState: updatedRun },
+    { type: "PERSIST_RUN", runState: finalRun },
     {
       type: "PERSIST_LOOP_STATE",
       runId,
-      loopState: deriveLoopStateFromRun(updatedRun, now),
+      loopState: deriveLoopStateFromRun(finalRun, now),
     },
-    ...startableStageEffects(updatedRun),
+    ...sched.startEffects,
+    ...skipObservations(runId, sched.newlySkipped, finalRun),
     {
       type: "EMIT_OBSERVATION",
       event: {
@@ -376,7 +513,7 @@ function reduceRunResumed(state: EngineState, event: RunResumedEvent): ReducerRe
         data: {
           runId,
           pipelineName: run.pipelineName,
-          stageNames: failedStageNames,
+          stageNames: [...failedStageNames, ...outdatedStageNames],
         },
       },
     },
@@ -431,11 +568,6 @@ function finalizeStageCompletion(
 ): ReducerResult {
   const updatedRun = patchRun(run, { [stageName]: updatedStage }, now);
 
-  const allTerminal = run.pipelineConfigSnapshot.stages.every((s) => {
-    const candidate = s.name === stageName ? updatedStage : updatedRun.stages[s.name];
-    return isTerminalStageStatus(candidate.status);
-  });
-
   const effects: PipelineEffect[] = [];
 
   if (newArtifacts.length > 0) {
@@ -461,6 +593,10 @@ function finalizeStageCompletion(
     },
   });
 
+  // Stage failure terminates the run as `stalled` (existing v0 behavior).
+  // Mid-flight or pending stages get cleaned up by terminateRunFromState
+  // (running → outdated, pending → skipped) so we don't leak inflight work
+  // onto the parallel branches that may still be running.
   if (outcome === "failure") {
     return terminateRunFromState(
       replaceRun(state, updatedRun),
@@ -472,10 +608,17 @@ function finalizeStageCompletion(
     );
   }
 
-  if (allTerminal) {
+  // Success path: the DAG scheduler may cascade-skip downstream stages whose
+  // routes are now unsatisfied, and may immediately schedule the next batch
+  // of parallel-eligible stages. Cascade-driven terminality is checked AFTER
+  // the cascade — only this can carry the run to `done` in one reducer step.
+  const sched = scheduleAfterChange(updatedRun, now);
+  effects.push(...skipObservations(run.runId, sched.newlySkipped, sched.run));
+
+  if (sched.allTerminal) {
     return terminateRunFromState(
-      replaceRun(state, updatedRun),
-      updatedRun,
+      replaceRun(state, sched.run),
+      sched.run,
       "completed",
       now,
       "done",
@@ -483,8 +626,8 @@ function finalizeStageCompletion(
     );
   }
 
-  effects.unshift({ type: "PERSIST_RUN", runState: updatedRun });
-  effects.push(...startableStageEffects(updatedRun));
+  effects.unshift({ type: "PERSIST_RUN", runState: sched.run });
+  effects.push(...sched.startEffects);
 
-  return { state: replaceRun(state, updatedRun), effects };
+  return { state: replaceRun(state, sched.run), effects };
 }

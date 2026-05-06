@@ -229,6 +229,70 @@ describe("pipeline engine — end-to-end", () => {
     expect(executor.startCalls).toHaveLength(0);
   });
 
+  it("rejects programmatic pipelines with a stage dependency cycle", async () => {
+    // Programmatic Pipeline construction skips Zod, so the engine must defend
+    // against cycles itself — otherwise the run would deadlock with every
+    // cycle member stuck `pending` forever.
+    const registry = withRegistry([makeAgentPlugin("codex", ["review"])]);
+    const store = createPipelineStore(storeRoot);
+    const executor = makeMockExecutor();
+    const engine = createPipelineEngine({ store, registry, agentExecutor: executor });
+
+    const cyclic: Pipeline = {
+      id: asPipelineId("cyclic"),
+      name: "cyclic",
+      stages: [
+        makeStage({ name: "a", dependsOn: ["b"] }),
+        makeStage({ name: "b", dependsOn: ["a"] }),
+      ],
+      maxConcurrentStages: 1,
+    };
+
+    await expect(
+      engine.startRun({
+        pipeline: cyclic,
+        projectId: "proj-a",
+        sessionId: "ses-1",
+        headSha: "sha",
+      }),
+    ).rejects.toBeInstanceOf(PipelineConfigError);
+    expect(executor.startCalls).toHaveLength(0);
+  });
+
+  it("validates pipelines on direct engine.dispatch(TRIGGER_FIRED)", async () => {
+    // Tests and a future config-watcher path can dispatch arbitrary events.
+    // engine.dispatch must apply the same validation as engine.startRun so
+    // callers can't silently inject a deadlocked TRIGGER_FIRED.
+    const registry = withRegistry([makeAgentPlugin("codex", ["review"])]);
+    const store = createPipelineStore(storeRoot);
+    const executor = makeMockExecutor();
+    const engine = createPipelineEngine({ store, registry, agentExecutor: executor });
+
+    const cyclic: Pipeline = {
+      id: asPipelineId("cyclic-dispatch"),
+      name: "cyclic-dispatch",
+      stages: [
+        makeStage({ name: "a", dependsOn: ["b"] }),
+        makeStage({ name: "b", dependsOn: ["a"] }),
+      ],
+      maxConcurrentStages: 1,
+    };
+
+    await expect(
+      engine.dispatch({
+        type: "TRIGGER_FIRED",
+        now: Date.now(),
+        trigger: "manual",
+        sessionId: "ses-1",
+        pipeline: cyclic,
+        headSha: "sha",
+        runId: "run-x" as ReturnType<typeof asPipelineId> as never,
+        stageRunIds: {},
+      } as never),
+    ).rejects.toBeInstanceOf(PipelineConfigError);
+    expect(executor.startCalls).toHaveLength(0);
+  });
+
   it("synthesizes STAGE_FAILED for non-agent executor kinds (v0.2 only supports agent)", async () => {
     const registry = withRegistry([makeAgentPlugin("codex", ["review"])]);
     const store = createPipelineStore(storeRoot);

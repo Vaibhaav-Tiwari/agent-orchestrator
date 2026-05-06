@@ -45,7 +45,7 @@ import {
   type StageRunId,
   type StageTriggerEvent,
 } from "./types.js";
-import { validatePipelineAgentModes } from "./validation.js";
+import { validatePipelineAgentModes, validatePipelineDag } from "./validation.js";
 import {
   type AgentStageExecutor,
   type RunningAgentStage,
@@ -135,6 +135,14 @@ export function createPipelineEngine(deps: PipelineEngineDeps): PipelineEngine {
   }
 
   async function dispatch(event: PipelineEvent): Promise<void> {
+    // Defense-in-depth: any TRIGGER_FIRED that enters the engine — whether
+    // via `startRun`, a test, or a future config-watcher injection — gets
+    // the same validation `startRun` applies. Validates synchronously
+    // before taking the lock so the error surfaces before any state moves.
+    if (event.type === "TRIGGER_FIRED") {
+      validatePipelineAgentModes(event.pipeline, registry);
+      validatePipelineDag(event.pipeline);
+    }
     return withLock(() => dispatchInline(event));
   }
 
@@ -283,7 +291,15 @@ export function createPipelineEngine(deps: PipelineEngineDeps): PipelineEngine {
   }
 
   async function startRun(input: StartRunInput): Promise<RunId> {
+    // Validate exactly once. Calling `dispatch` here would re-validate
+    // inside the lock, opening a window where the registry could mutate
+    // between the two synchronous checks — if the second throws, the
+    // `runMetadata.set` below would have already populated an orphan entry
+    // with no matching run. Instead we validate up front and skip
+    // `dispatch`'s validation by going through `withLock(dispatchInline)`
+    // directly.
     validatePipelineAgentModes(input.pipeline, registry);
+    validatePipelineDag(input.pipeline);
 
     const runId = asRunId(`run-${randomUUID()}`);
     const stageRunIds: Record<string, StageRunId> = {};
@@ -299,16 +315,18 @@ export function createPipelineEngine(deps: PipelineEngineDeps): PipelineEngine {
       issueId: input.issueId,
     });
 
-    await dispatch({
-      type: "TRIGGER_FIRED",
-      now: now(),
-      trigger: input.trigger ?? "manual",
-      sessionId: input.sessionId,
-      pipeline: input.pipeline,
-      headSha: input.headSha,
-      runId,
-      stageRunIds,
-    });
+    await withLock(() =>
+      dispatchInline({
+        type: "TRIGGER_FIRED",
+        now: now(),
+        trigger: input.trigger ?? "manual",
+        sessionId: input.sessionId,
+        pipeline: input.pipeline,
+        headSha: input.headSha,
+        runId,
+        stageRunIds,
+      }),
+    );
 
     return runId;
   }

@@ -1,16 +1,20 @@
 /**
  * Pipeline configuration validation.
  *
- * Runs at config load (not at runtime). Today the only check is the
- * `supportedTaskModes` contract on agent stages: if a stage routes
- * `executor.kind === "agent"` with `mode = "review"`, the named agent plugin
- * must advertise `"review"` in its manifest's `supportedTaskModes`.
+ * Two checks today:
+ *  - `validatePipelineAgentModes` — every agent stage routes to a registered
+ *    plugin whose manifest advertises the requested `task.mode`.
+ *  - `validatePipelineDag` — the dependsOn + routes-refs graph is acyclic.
+ *    Zod already enforces this at config load via `superRefine`; the runtime
+ *    check guards programmatic Pipelines that bypass Zod (e.g. callers that
+ *    construct a `Pipeline` directly and hand it to `engine.startRun`).
  *
  * Failures throw PipelineConfigError with a message that names the offending
- * stage, agent, and mode — the engine never sees a misconfigured pipeline.
+ * stage and pipeline — the engine never advances a misconfigured pipeline.
  */
 
 import type { PluginManifest, PluginRegistry } from "../types.js";
+import { findFirstStageCycle } from "./dag.js";
 import type { Pipeline, TaskMode } from "./types.js";
 
 export class PipelineConfigError extends Error {
@@ -61,5 +65,26 @@ export function validatePipelineAgentModes(pipeline: Pipeline, registry: PluginR
           .join(", ")}].`,
       );
     }
+  }
+}
+
+/**
+ * Reject a runtime `Pipeline` whose `dependsOn` + `routes.when.stages` graph
+ * contains a cycle. Zod already enforces this at config load, but programmatic
+ * callers (tests, future engine consumers, in-process pipeline construction)
+ * skip Zod and would otherwise deadlock the run silently — every cycle member
+ * would stay `pending` forever because `arePreconditionsTerminal` is false
+ * for every node in the cycle.
+ *
+ * Throws `PipelineConfigError` on the first cycle found. Self-loops are not
+ * surfaced here; the schema-level explicit self-reference checks own that
+ * error path.
+ */
+export function validatePipelineDag(pipeline: Pipeline): void {
+  const cycle = findFirstStageCycle(pipeline.stages);
+  if (cycle) {
+    throw new PipelineConfigError(
+      `Pipeline "${pipeline.name}" has a stage dependency cycle: ${cycle.join(" → ")}.`,
+    );
   }
 }
