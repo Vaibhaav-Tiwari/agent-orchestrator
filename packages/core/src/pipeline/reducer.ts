@@ -36,6 +36,7 @@ import {
   type StageState,
   type StageTriggerEvent,
   type Verdict,
+  isTerminalLoopState,
   loopKey,
 } from "./types.js";
 
@@ -353,6 +354,17 @@ function reduceRunResumed(state: EngineState, event: RunResumedEvent): ReducerRe
   const run = state.runs[runId];
   if (!run) return invalidTransition(state, `RUN_RESUMED for unknown runId=${runId}`);
 
+  // Resume only applies to runs that have stopped advancing. The CLI rejects
+  // non-terminal runs at the service layer; this guard catches direct
+  // dispatch (tests, future config-watcher) so the reducer never re-arms a
+  // run the engine still considers active.
+  if (!isTerminalLoopState(run.loopState)) {
+    return invalidTransition(
+      state,
+      `RUN_RESUMED requires a terminal loop state; got ${run.loopState} for ${runId}`,
+    );
+  }
+
   // Refuse to resume when another run already owns the loop key. Without
   // this guard, resuming an old stalled run after a fresh trigger has
   // claimed the loop would silently dispossess the active run of its loop
@@ -367,11 +379,12 @@ function reduceRunResumed(state: EngineState, event: RunResumedEvent): ReducerRe
     );
   }
 
-  // `failed` stages need a fresh stageRunId + attempt bump (a real retry).
-  // `outdated` stages were running at terminate time (terminateRunFromState
-  // marked `running → outdated`); their work was cancelled, so they also
-  // need a fresh stageRunId and attempt bump to re-run cleanly. The CLI
-  // service is expected to allocate stageRunIds for both kinds.
+  // `failed` stages are real retries — bump attempt and consume the
+  // `stage.retries` budget. `outdated` stages were running when an external
+  // event (NEW_SHA_DETECTED, CONFIG_CHANGED, parallel-sibling failure)
+  // forced `terminateRunFromState` to cancel them; that's not a stage
+  // failure, so reviving them must NOT consume the retry cap. They keep
+  // their attempt counter and just get a fresh stageRunId for the next run.
   const failedStageNames = Object.entries(run.stages)
     .filter(([, s]) => s.status === "failed")
     .map(([name]) => name);
@@ -383,25 +396,22 @@ function reduceRunResumed(state: EngineState, event: RunResumedEvent): ReducerRe
     return { state, effects: [] };
   }
 
-  // Cap the attempt bump by the configured retries (when set). The reducer
-  // ignores resumes that would exceed retries — operators can still re-cancel
-  // and re-trigger if they want a fresh run.
   const stageRetriesByName = new Map<string, number | undefined>();
   for (const stage of run.pipelineConfigSnapshot.stages) {
     stageRetriesByName.set(stage.name, stage.retries);
   }
 
   const stageDelta: Record<string, StageState> = {};
-  const retriedStageNames = [...failedStageNames, ...outdatedStageNames];
-  for (const name of retriedStageNames) {
+
+  // Real retries: bump attempt, check the retries cap.
+  for (const name of failedStageNames) {
     const fresh = stageRunIds[name];
     if (!fresh) {
       return invalidTransition(
         state,
-        `RUN_RESUMED missing stageRunId for ${run.stages[name].status} stage "${name}"`,
+        `RUN_RESUMED missing stageRunId for failed stage "${name}"`,
       );
     }
-
     const prior = run.stages[name];
     const cap = stageRetriesByName.get(name);
     if (cap !== undefined && prior.attempt >= cap + 1) {
@@ -410,11 +420,28 @@ function reduceRunResumed(state: EngineState, event: RunResumedEvent): ReducerRe
         `RUN_RESUMED would exceed stage.retries=${cap} for "${name}" (attempt=${prior.attempt})`,
       );
     }
-
     stageDelta[name] = {
       stageRunId: fresh,
       status: "pending",
       attempt: prior.attempt + 1,
+      artifacts: [],
+    };
+  }
+
+  // External cancellations: don't bump attempt, don't check cap.
+  for (const name of outdatedStageNames) {
+    const fresh = stageRunIds[name];
+    if (!fresh) {
+      return invalidTransition(
+        state,
+        `RUN_RESUMED missing stageRunId for outdated stage "${name}"`,
+      );
+    }
+    const prior = run.stages[name];
+    stageDelta[name] = {
+      stageRunId: fresh,
+      status: "pending",
+      attempt: prior.attempt,
       artifacts: [],
     };
   }
@@ -476,7 +503,7 @@ function reduceRunResumed(state: EngineState, event: RunResumedEvent): ReducerRe
         data: {
           runId,
           pipelineName: run.pipelineName,
-          stageNames: retriedStageNames,
+          stageNames: [...failedStageNames, ...outdatedStageNames],
         },
       },
     },

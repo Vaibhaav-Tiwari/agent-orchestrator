@@ -599,7 +599,10 @@ describe("pipeline DAG — RUN_RESUMED with cascade-skipped stages", () => {
     const run = resumed.state.runs[asRunId("run-1")];
     expect(run.stages.a.status).toBe("pending");
     expect(run.stages.b.status).toBe("pending");
-    expect(run.stages.b.attempt).toBe(2);
+    // `failed` stages bump attempt (real retry against the cap).
+    expect(run.stages.a.attempt).toBe(2);
+    // `outdated` stages keep attempt — external cancellation, not a retry.
+    expect(run.stages.b.attempt).toBe(1);
     expect(run.stages.b.stageRunId).toBe(asStageRunId("sr-b-2"));
     expect(run.stages.d.status).toBe("pending");
 
@@ -608,6 +611,88 @@ describe("pipeline DAG — RUN_RESUMED with cascade-skipped stages", () => {
       .map((e) => (e.type === "START_STAGE" ? e.stage.name : ""))
       .sort();
     expect(startNames).toEqual(["a", "b"]);
+  });
+
+  it("outdated revival does not consume the stage.retries budget", () => {
+    // With retries=1 (cap=1, max attempt=2): one real failure plus one
+    // mid-flight CONFIG_CHANGED (which marks the stage outdated) used to
+    // burn the retry budget. Reviving outdated must not consume the cap so
+    // the user retains their failure-retry allowance.
+    const pipeline = makePipeline(
+      [makeStage("a"), makeStage("b", { retries: 1 })],
+      2,
+    );
+    const triggered = fireTrigger(pipeline);
+    let s = startStage(triggered.state, asRunId("run-1"), "a", NOW + 1).state;
+    s = startStage(s, asRunId("run-1"), "b", NOW + 2).state;
+    // a fails -> run terminates, b is marked outdated (it was running).
+    const failed = reduce(s, {
+      type: "STAGE_FAILED",
+      now: NOW + 3,
+      runId: asRunId("run-1"),
+      stageName: "a",
+      errorMessage: "boom",
+    });
+    expect(failed.state.runs[asRunId("run-1")].stages.b.status).toBe("outdated");
+    expect(failed.state.runs[asRunId("run-1")].stages.b.attempt).toBe(1);
+
+    // Resume #1: a (failed) -> attempt 2; b (outdated) -> attempt 1.
+    const resumed1 = reduce(failed.state, {
+      type: "RUN_RESUMED",
+      now: NOW + 4,
+      runId: asRunId("run-1"),
+      stageRunIds: { a: asStageRunId("sr-a-2"), b: asStageRunId("sr-b-2") },
+    });
+    expect(resumed1.state.runs[asRunId("run-1")].stages.a.attempt).toBe(2);
+    expect(resumed1.state.runs[asRunId("run-1")].stages.b.attempt).toBe(1);
+
+    // Now simulate a -> succeeds, b -> running -> mid-flight terminate again.
+    let s2 = startStage(resumed1.state, asRunId("run-1"), "a", NOW + 5).state;
+    s2 = completeStage(s2, asRunId("run-1"), "a", NOW + 6).state;
+    s2 = startStage(s2, asRunId("run-1"), "b", NOW + 7).state;
+    const cancelled = reduce(s2, {
+      type: "RUN_CANCELLED",
+      now: NOW + 8,
+      runId: asRunId("run-1"),
+      reason: "config_change",
+    });
+    // b is outdated again. attempt is still 1 (never bumped on revival).
+    expect(cancelled.state.runs[asRunId("run-1")].stages.b.status).toBe("outdated");
+    expect(cancelled.state.runs[asRunId("run-1")].stages.b.attempt).toBe(1);
+
+    // Resume #2: b retries WITHOUT exceeding cap=1. With the previous behavior
+    // (attempt bumped on every revival), this would have rejected with
+    // "would exceed stage.retries=1".
+    const resumed2 = reduce(cancelled.state, {
+      type: "RUN_RESUMED",
+      now: NOW + 9,
+      runId: asRunId("run-1"),
+      stageRunIds: { b: asStageRunId("sr-b-3") },
+    });
+    expect(resumed2.state.runs[asRunId("run-1")].loopState).toBe("running");
+    expect(resumed2.state.runs[asRunId("run-1")].stages.b.status).toBe("pending");
+    expect(resumed2.state.runs[asRunId("run-1")].stages.b.attempt).toBe(1);
+  });
+
+  it("rejects direct RUN_RESUMED on a non-terminal run", () => {
+    // CLI rejects this at the service layer; the reducer guard catches
+    // direct dispatch (config-watcher / tests / programmatic injection).
+    const pipeline = makePipeline([makeStage("a")], 1);
+    const triggered = fireTrigger(pipeline);
+    const startedA = startStage(triggered.state, asRunId("run-1"), "a", NOW + 1);
+    // run is "running" (non-terminal). Resume must be rejected.
+    const resumed = reduce(startedA.state, {
+      type: "RUN_RESUMED",
+      now: NOW + 2,
+      runId: asRunId("run-1"),
+      stageRunIds: { a: asStageRunId("sr-a-2") },
+    });
+    expect(resumed.state.runs[asRunId("run-1")].stages.a.status).toBe("running");
+    const obs = resumed.effects.find(
+      (e) =>
+        e.type === "EMIT_OBSERVATION" && e.event.name === "pipeline.invalid_transition",
+    );
+    expect(obs).toBeDefined();
   });
 
   it("rejects RUN_RESUMED that omits a stageRunId for an outdated stage", () => {

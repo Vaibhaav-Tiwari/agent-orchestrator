@@ -291,10 +291,13 @@ export function createPipelineEngine(deps: PipelineEngineDeps): PipelineEngine {
   }
 
   async function startRun(input: StartRunInput): Promise<RunId> {
-    // Pipeline validation lives in `dispatch` so any TRIGGER_FIRED entering
-    // the engine is checked the same way; we run validation here too only
-    // to surface errors before the runId/stageRunId allocations below
-    // (which would otherwise leak into runMetadata if dispatch threw).
+    // Validate exactly once. Calling `dispatch` here would re-validate
+    // inside the lock, opening a window where the registry could mutate
+    // between the two synchronous checks — if the second throws, the
+    // `runMetadata.set` below would have already populated an orphan entry
+    // with no matching run. Instead we validate up front and skip
+    // `dispatch`'s validation by going through `withLock(dispatchInline)`
+    // directly.
     validatePipelineAgentModes(input.pipeline, registry);
     validatePipelineDag(input.pipeline);
 
@@ -312,16 +315,18 @@ export function createPipelineEngine(deps: PipelineEngineDeps): PipelineEngine {
       issueId: input.issueId,
     });
 
-    await dispatch({
-      type: "TRIGGER_FIRED",
-      now: now(),
-      trigger: input.trigger ?? "manual",
-      sessionId: input.sessionId,
-      pipeline: input.pipeline,
-      headSha: input.headSha,
-      runId,
-      stageRunIds,
-    });
+    await withLock(() =>
+      dispatchInline({
+        type: "TRIGGER_FIRED",
+        now: now(),
+        trigger: input.trigger ?? "manual",
+        sessionId: input.sessionId,
+        pipeline: input.pipeline,
+        headSha: input.headSha,
+        runId,
+        stageRunIds,
+      }),
+    );
 
     return runId;
   }
