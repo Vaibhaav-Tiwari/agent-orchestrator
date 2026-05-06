@@ -1837,18 +1837,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     // Check for a stale reservation file: `get()` returned null (no valid
-    // metadata) but the file exists on disk from a previous crashed/killed
-    // run. `reserveSessionId` will see this as occupied and throw. Clean up
-    // now to avoid a confusing error and a 20s concurrent-orchestrator wait.
+    // metadata) but the file may exist on disk from a previous crashed/killed
+    // run. `reserveSessionId` will see it as occupied and throw. Unconditionally
+    // attempt cleanup — if the file doesn't exist this is a no-op, and if it
+    // does but a concurrent process just wrote valid metadata, the O_EXCL in
+    // reserveSessionId protects it (deleteMetadata won't remove a file that
+    // was re-created after our stat).
     const sessionsDir = getProjectSessionsDir(orchestratorConfig.projectId);
-    if (readMetadataRaw(sessionsDir, sessionId) === null) {
-      // No valid metadata — but the file might still exist (empty or corrupt).
-      // Try a best-effort cleanup so `reserveSessionId` succeeds.
-      try {
-        deleteMetadata(sessionsDir, sessionId);
-      } catch {
-        /* best effort — file may not exist, that's fine */
-      }
+    try {
+      deleteMetadata(sessionsDir, sessionId);
+    } catch {
+      /* best effort — file may not exist, that's fine */
     }
 
     try {
@@ -1870,7 +1869,16 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         /* best effort */
       }
 
-      return await spawnOrchestrator(orchestratorConfig);
+      try {
+        return await spawnOrchestrator(orchestratorConfig);
+      } catch (retryErr) {
+        // Third attempt failed — surface original error with retry context
+        // rather than the raw "already exists" message.
+        throw new Error(
+          `Orchestrator session "${sessionId}" could not be created after retry. ` +
+            `Another process may be creating it concurrently. Original error: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`,
+        );
+      }
     }
   }
 
