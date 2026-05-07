@@ -32,6 +32,7 @@ import {
   loadGlobalConfig,
 } from "./global-config.js";
 import { loadEffectiveProjectConfig } from "./project-resolver.js";
+import { recordActivityEvent } from "./activity-events.js";
 
 function inferScmPlugin(project: {
   repo?: string;
@@ -878,6 +879,14 @@ function buildEffectiveConfigFromGlobalConfigPath(configPath: string): LoadedCon
         path: entry.path,
         resolveError: error.message,
       };
+      recordActivityEvent({
+        projectId,
+        source: "config",
+        kind: "config.project_resolve_failed",
+        level: "error",
+        summary: `project ${projectId} failed to resolve`,
+        data: { path: entry.path, error: error.message },
+      });
     }
   }
 
