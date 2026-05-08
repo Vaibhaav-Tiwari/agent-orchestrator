@@ -311,3 +311,92 @@ describe("TerminalManager.open — tmux target args (regression for #1714)", () 
     expect(args).toEqual(["attach-session", "-t", "=ao-177"]);
   });
 });
+
+describe("TerminalManager.subscribe — PTY lifecycle", () => {
+  type ExitHandler = (event: { exitCode: number }) => void;
+
+  let ptys: Array<{ exit: (exitCode?: number) => void; kill: ReturnType<typeof vi.fn> }>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSpawn.mockReset();
+    mockPtySpawn.mockReset();
+    ptys = [];
+
+    // spawn() returns an object that emits "error" — we just need .on() to work.
+    mockSpawn.mockImplementation(() => new EventEmitter());
+
+    mockPtySpawn.mockImplementation(() => {
+      let exitHandler: ExitHandler | undefined;
+      const pty = {
+        onData: vi.fn(),
+        onExit: vi.fn((handler: ExitHandler) => {
+          exitHandler = handler;
+        }),
+        write: vi.fn(),
+        resize: vi.fn(),
+        kill: vi.fn(),
+      };
+
+      ptys.push({
+        exit: (exitCode = 0) => exitHandler?.({ exitCode }),
+        kill: pty.kill,
+      });
+      return pty;
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("keeps the PTY alive during the last-subscriber close grace period", async () => {
+    const mgr = new TerminalManager("/usr/bin/tmux");
+
+    const unsubscribe = mgr.subscribe("ao-177", undefined, vi.fn());
+    unsubscribe();
+
+    await vi.advanceTimersByTimeAsync(29_999);
+
+    expect(ptys[0]?.kill).not.toHaveBeenCalled();
+    expect(mockPtySpawn).toHaveBeenCalledTimes(1);
+
+    mgr.subscribe("ao-177", undefined, vi.fn());
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(ptys[0]?.kill).not.toHaveBeenCalled();
+    expect(mockPtySpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("kills the PTY after the close grace period when no subscriber reconnects", async () => {
+    const mgr = new TerminalManager("/usr/bin/tmux");
+
+    const unsubscribe = mgr.subscribe("ao-177", undefined, vi.fn());
+    unsubscribe();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(ptys[0]?.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("backs off before re-attaching after a PTY exit with active subscribers", async () => {
+    const mgr = new TerminalManager("/usr/bin/tmux");
+    mgr.subscribe("ao-177", undefined, vi.fn(), vi.fn());
+
+    ptys[0]?.exit(1);
+
+    expect(mockPtySpawn).toHaveBeenCalledTimes(1);
+
+    mgr.subscribe("ao-177", undefined, vi.fn(), vi.fn());
+    expect(mockPtySpawn).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_999);
+
+    expect(mockPtySpawn).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(mockPtySpawn).toHaveBeenCalledTimes(2);
+  });
+});

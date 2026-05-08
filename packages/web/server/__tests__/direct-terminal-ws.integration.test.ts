@@ -196,7 +196,12 @@ describe("mux terminal open", () => {
     const ws = await connectMux();
 
     ws.send(
-      JSON.stringify({ ch: "terminal", id: "test-session", tmuxName: TEST_SESSION, type: "open" }),
+      JSON.stringify({
+        ch: "terminal",
+        id: "test-session",
+        tmuxName: TEST_SESSION,
+        type: "open",
+      }),
     );
 
     const msg = await waitForMessage(ws, (m) => m.ch === "terminal" && m.type === "opened");
@@ -296,9 +301,10 @@ describe("mux terminal open", () => {
     //   2. Wait > REATTACH_RESET_GRACE_MS so the grace timer fires and
     //      resets reattachAttempts to 0 on the still-attached PTY 1.
     //   3. Kill the tmux session — PTY 1 exits, the server burns the full
-    //      MAX_REATTACH_ATTEMPTS=3 budget trying to re-attach, then emits
-    //      "exited". A 2 s window is comfortably more than 3 × ~50 ms.
-    //   4. Per-test timeout raised to 15 s to accommodate the 5+ s wait.
+    //      MAX_REATTACH_ATTEMPTS=3 budget trying to re-attach with the
+    //      production backoff between attempts, then emits "exited".
+    //   4. Per-test timeout raised to 20 s to accommodate the 5+ s wait
+    //      and the retry backoff windows.
     //
     // If the grace timer or its closure guard ever regresses (e.g. is
     // unref'd in a way that prevents firing, or the wrong reference is
@@ -322,7 +328,7 @@ describe("mux terminal open", () => {
       const exitedMsg = await waitForMessage(
         ws,
         (m) => m.ch === "terminal" && m.type === "exited",
-        2000,
+        8000,
       );
       expect(exitedMsg.id).toBe(RECOVERY_TEST_SESSION);
 
@@ -334,7 +340,7 @@ describe("mux terminal open", () => {
         /* already gone */
       }
     }
-  }, 15_000);
+  }, 20_000);
 
   it("bounds re-attach attempts when tmux session dies mid-subscription (issue #1639)", async () => {
     // Reproduces the runaway re-attach loop that exhausts the system PTY
@@ -364,11 +370,11 @@ describe("mux terminal open", () => {
       // to attach to and will exit ~40 ms after each re-attach attempt.
       execFileSync(TMUX, ["kill-session", "-t", RUNAWAY_TEST_SESSION], { timeout: 5000 });
 
-      // 3 re-attach attempts × ~50 ms each = ~150 ms; allow generous margin.
+      // 3 re-attach attempts with production backoff; allow generous margin.
       const exitedMsg = await waitForMessage(
         ws,
         (m) => m.ch === "terminal" && m.type === "exited",
-        2000,
+        8000,
       );
       expect(exitedMsg.id).toBe(RUNAWAY_TEST_SESSION);
 
@@ -381,7 +387,7 @@ describe("mux terminal open", () => {
         /* already gone */
       }
     }
-  });
+  }, 12_000);
 });
 
 // =============================================================================
@@ -393,7 +399,12 @@ describe("mux terminal I/O", () => {
     const ws = await connectMux();
 
     ws.send(
-      JSON.stringify({ ch: "terminal", id: "test-session", tmuxName: TEST_SESSION, type: "open" }),
+      JSON.stringify({
+        ch: "terminal",
+        id: `test-session-data-${process.pid}`,
+        tmuxName: TEST_SESSION,
+        type: "open",
+      }),
     );
     await waitForMessage(ws, (m) => m.ch === "terminal" && m.type === "opened");
 

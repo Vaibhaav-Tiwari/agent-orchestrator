@@ -200,11 +200,25 @@ interface ManagedTerminal {
    * reachable for up to 5 s after teardown.
    */
   resetTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * Pending last-subscriber grace timer. When all WebSocket subscribers
+   * disconnect, keep the PTY alive briefly so reload/sleep/wake reconnects
+   * can re-use the same macOS PTY slot.
+   */
+  closeTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * Pending delayed re-attach after a PTY exits while subscribers are present.
+   * Tracked so teardown can cancel the retry instead of spawning a fresh PTY
+   * after the terminal has no listeners.
+   */
+  reattachTimer?: ReturnType<typeof setTimeout>;
 }
 
 const RING_BUFFER_MAX = 50 * 1024; // 50KB max per terminal
 const WS_BUFFER_HIGH_WATERMARK = 64 * 1024; // 64KB
 const MAX_REATTACH_ATTEMPTS = 3;
+const TERMINAL_CLOSE_GRACE_MS = 30_000;
+const REATTACH_RETRY_DELAY_MS = 2_000;
 /**
  * Grace period a freshly-attached PTY must survive before its successful
  * attach is allowed to reset the re-attach counter. Prevents tight crash
@@ -271,6 +285,9 @@ export class TerminalManager {
 
     // If PTY is already attached, we're done
     if (terminal.pty) {
+      return tmuxSessionId;
+    }
+    if (terminal.reattachTimer) {
       return tmuxSessionId;
     }
 
@@ -381,12 +398,26 @@ export class TerminalManager {
         console.log(
           `[MuxServer] Re-attaching to ${id} (attempt ${terminal.reattachAttempts}/${MAX_REATTACH_ATTEMPTS})`,
         );
-        try {
-          this.open(id, projectId, tmuxSessionId);
-          return; // re-attached — don't notify exit
-        } catch (err) {
-          console.error(`[MuxServer] Failed to re-attach ${id}:`, err);
+        if (terminal.reattachTimer) {
+          clearTimeout(terminal.reattachTimer);
         }
+        terminal.reattachTimer = setTimeout(() => {
+          terminal.reattachTimer = undefined;
+          if (terminal.subscribers.size === 0 || terminal.pty) {
+            return;
+          }
+
+          try {
+            this.open(id, projectId, tmuxSessionId);
+          } catch (err) {
+            console.error(`[MuxServer] Failed to re-attach ${id}:`, err);
+            for (const cb of terminal.exitCallbacks) {
+              cb(exitCode);
+            }
+          }
+        }, REATTACH_RETRY_DELAY_MS);
+        terminal.reattachTimer.unref();
+        return; // scheduled re-attach — don't notify exit yet
       } else if (terminal.reattachAttempts >= MAX_REATTACH_ATTEMPTS) {
         console.error(`[MuxServer] Max re-attach attempts reached for ${id}, giving up`);
       }
@@ -443,22 +474,42 @@ export class TerminalManager {
     // Add subscriber
     terminal.subscribers.add(callback);
     if (onExit) terminal.exitCallbacks.add(onExit);
+    if (terminal.closeTimer) {
+      clearTimeout(terminal.closeTimer);
+      terminal.closeTimer = undefined;
+    }
 
     // Return unsubscribe function
     return () => {
       terminal.subscribers.delete(callback);
       if (onExit) terminal.exitCallbacks.delete(onExit);
-      // Kill PTY and clean up when the last subscriber leaves
+      // Kill PTY and clean up after a short grace period when the last subscriber leaves.
       if (terminal.subscribers.size === 0) {
-        if (terminal.resetTimer) {
-          clearTimeout(terminal.resetTimer);
-          terminal.resetTimer = undefined;
+        if (terminal.closeTimer) {
+          return;
         }
-        if (terminal.pty) {
-          terminal.pty.kill();
-          terminal.pty = null;
-        }
-        this.terminals.delete(key);
+
+        terminal.closeTimer = setTimeout(() => {
+          terminal.closeTimer = undefined;
+          if (terminal.subscribers.size > 0) {
+            return;
+          }
+
+          if (terminal.resetTimer) {
+            clearTimeout(terminal.resetTimer);
+            terminal.resetTimer = undefined;
+          }
+          if (terminal.reattachTimer) {
+            clearTimeout(terminal.reattachTimer);
+            terminal.reattachTimer = undefined;
+          }
+          if (terminal.pty) {
+            terminal.pty.kill();
+            terminal.pty = null;
+          }
+          this.terminals.delete(key);
+        }, TERMINAL_CLOSE_GRACE_MS);
+        terminal.closeTimer.unref();
       }
     };
   }
