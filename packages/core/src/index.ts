@@ -121,7 +121,6 @@ export {
   isTmuxAvailable,
   listSessions as listTmuxSessions,
   hasSession as hasTmuxSession,
-  newSession as newTmuxSession,
   sendKeys as tmuxSendKeys,
   capturePane as tmuxCapturePane,
   killSession as killTmuxSession,
@@ -131,6 +130,10 @@ export {
 // Session manager — session CRUD
 export { createSessionManager } from "./session-manager.js";
 export type { SessionManagerDeps } from "./session-manager.js";
+
+// Process-scoped async memoization — used by plugins to dedupe shared
+// prerequisite checks (e.g. multiple github plugins checking gh auth).
+export { memoizeAsync, _clearProcessCacheForTests } from "./process-cache.js";
 
 // Lifecycle manager — state machine + reaction engine
 export { createLifecycleManager } from "./lifecycle-manager.js";
@@ -211,6 +214,9 @@ export {
   buildAgentPath,
   PREFERRED_GH_PATH,
 } from "./agent-workspace-hooks.js";
+
+// Git-based activity helpers — recent-commit liveness signal for agent plugins
+export { hasRecentCommits } from "./git-activity.js";
 export type { NormalizedOrchestratorSessionStrategy } from "./orchestrator-session-strategy.js";
 
 export {
@@ -276,6 +282,17 @@ export {
   expandHome,
   validateAndStoreOrigin,
 } from "./paths.js";
+
+// Platform adapter — centralized cross-platform branching
+export {
+  isWindows,
+  isMac,
+  getDefaultRuntime,
+  getShell,
+  killProcessTree,
+  findPidByPort,
+  getEnvDefaults,
+} from "./platform.js";
 
 export { normalizeOriginUrl, relativeSubdir, deriveStorageKey } from "./storage-key.js";
 
@@ -380,9 +397,17 @@ export type {
 
 export { atomicWriteFileSync } from "./atomic-write.js";
 
+export {
+  registerWindowsPtyHost,
+  unregisterWindowsPtyHost,
+  getWindowsPtyHosts,
+  clearWindowsPtyHostRegistry,
+  type WindowsPtyHostEntry,
+} from "./windows-pty-registry.js";
+
 // Activity event logging — structured diagnostic event trail
 export { recordActivityEvent, droppedEventCount } from "./activity-events.js";
-export { isActivityEventsFtsEnabled } from "./events-db.js";
+export { isActivityEventsFtsEnabled, closeDb } from "./events-db.js";
 export type {
   ActivityEventInput,
   ActivityEventKind,

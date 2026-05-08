@@ -9,15 +9,27 @@ import { getAttentionLevel, type DashboardSession, type AttentionLevel } from "@
 import { isOrchestratorSession } from "@aoagents/ao-core/types";
 import { getSessionTitle, humanizeBranch } from "@/lib/format";
 import { usePopoverClamp } from "@/hooks/usePopoverClamp";
-import { getOrchestratorSessionId } from "@/lib/orchestrator-utils";
 import { projectDashboardPath, projectSessionPath } from "@/lib/routes";
 import { ThemeToggle } from "./ThemeToggle";
 import { AddProjectModal } from "./AddProjectModal";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 
+/** Minimal shape needed to render an orchestrator link in the sidebar. */
+export interface ProjectSidebarOrchestrator {
+  id: string;
+  projectId: string;
+}
+
 interface ProjectSidebarProps {
   projects: ProjectInfo[];
   sessions: DashboardSession[] | null;
+  /**
+   * Per-project orchestrator link. Sourced upstream from `/api/sessions`
+   * (the `orchestrators` field), which already applies the canonical
+   * "prefer live, fall back to terminal" selection. Not derivable from
+   * `sessions`: the sessions endpoint strips orchestrators out.
+   */
+  orchestrators?: ProjectSidebarOrchestrator[];
   activeProjectId: string | undefined;
   activeSessionId: string | undefined;
   loading?: boolean;
@@ -70,14 +82,76 @@ const LEVEL_LABELS: Record<AttentionLevel, string> = {
 
 export function ProjectSidebar(props: ProjectSidebarProps) {
   if (props.projects.length === 0) {
-    return null;
+    return <ProjectSidebarEmpty collapsed={props.collapsed} />;
   }
   return <ProjectSidebarInner {...props} />;
+}
+
+function ProjectSidebarEmpty({ collapsed = false }: { collapsed?: boolean }) {
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
+
+  if (collapsed) {
+    return (
+      <aside className="project-sidebar project-sidebar--collapsed flex h-full flex-col items-center gap-1 py-2">
+        <button
+          type="button"
+          className="project-sidebar__add-btn"
+          aria-label="New project"
+          onClick={() => setAddProjectOpen(true)}
+        >
+          <svg
+            aria-hidden="true"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            viewBox="0 0 24 24"
+          >
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+        <AddProjectModal open={addProjectOpen} onClose={() => setAddProjectOpen(false)} />
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="project-sidebar flex h-full flex-col">
+      <div className="project-sidebar__compact-hdr">
+        <span className="project-sidebar__sect-label">Projects</span>
+        <button
+          type="button"
+          className="project-sidebar__add-btn"
+          aria-label="New project"
+          onClick={() => setAddProjectOpen(true)}
+        >
+          <svg
+            aria-hidden="true"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            viewBox="0 0 24 24"
+          >
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+      </div>
+      <div className="project-sidebar__empty flex-1 text-[var(--color-text-tertiary)]">
+        No projects yet. Click + to add one.
+      </div>
+      <div className="project-sidebar__footer">
+        <div className="flex items-center justify-end gap-1 border-t border-[var(--color-border-subtle)] px-2 py-2">
+          <ThemeToggle className="project-sidebar__theme-toggle" />
+        </div>
+      </div>
+      <AddProjectModal open={addProjectOpen} onClose={() => setAddProjectOpen(false)} />
+    </aside>
+  );
 }
 
 function ProjectSidebarInner({
   projects,
   sessions,
+  orchestrators,
   activeProjectId,
   activeSessionId,
   loading = false,
@@ -184,6 +258,14 @@ function ProjectSidebarInner({
   const allPrefixes = useMemo(
     () => visibleProjects.map((p) => p.sessionPrefix ?? p.id),
     [visibleProjects],
+  );
+
+  // The API (selectPreferredOrchestratorId) sends at most one entry per
+  // project, so collapsing into a Map keyed by projectId is lossless. If a
+  // future API change starts emitting multiples, the last one wins here.
+  const orchestratorByProject = useMemo(
+    () => new Map((orchestrators ?? []).map((o) => [o.projectId, o])),
+    [orchestrators],
   );
 
   const sessionsByProject = useMemo(() => {
@@ -352,7 +434,13 @@ function ProjectSidebarInner({
           aria-label="New project"
           onClick={() => setAddProjectOpen(true)}
         >
-          <svg fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <svg
+            aria-hidden="true"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            viewBox="0 0 24 24"
+          >
             <path d="M12 5v14M5 12h14" />
           </svg>
         </button>
@@ -390,13 +478,7 @@ function ProjectSidebarInner({
           const visibleSessions = workerSessions;
           const hasActiveSessions = visibleSessions.length > 0;
 
-          const projectPrefix = prefixByProject.get(project.id);
-          const canonicalOrchestratorId = projectPrefix
-            ? getOrchestratorSessionId({ sessionPrefix: projectPrefix })
-            : null;
-          const orchestratorSession = sessions?.find(
-            (s) => s.projectId === project.id && s.id === canonicalOrchestratorId,
-          );
+          const orchestratorLink = orchestratorByProject.get(project.id) ?? null;
 
           return (
             <div key={project.id} className="project-sidebar__project">
@@ -498,9 +580,9 @@ function ProjectSidebarInner({
                 ) : null}
 
                 {/* Orchestrator button */}
-                {!isDegraded && orchestratorSession && (
+                {!isDegraded && orchestratorLink && (
                   <Link
-                    href={projectSessionPath(project.id, orchestratorSession.id)}
+                    href={projectSessionPath(project.id, orchestratorLink.id)}
                     onClick={(e) => {
                       e.stopPropagation();
                       onMobileClose?.();
@@ -563,6 +645,19 @@ function ProjectSidebarInner({
                       role="menu"
                       aria-label={`${project.name} actions`}
                     >
+                      {orchestratorLink ? (
+                        <button
+                          type="button"
+                          className="project-sidebar__proj-menu-item"
+                          role="menuitem"
+                          onClick={() => {
+                            setProjectMenuOpenId(null);
+                            navigate(projectSessionPath(project.id, orchestratorLink.id));
+                          }}
+                        >
+                          Open orchestrator
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="project-sidebar__proj-menu-item"

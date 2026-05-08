@@ -409,6 +409,13 @@ export interface Runtime {
 
   /** Get info needed to attach a human to this session (for Terminal plugin) */
   getAttachInfo?(handle: RuntimeHandle): Promise<AttachInfo>;
+
+  /**
+   * Optional: validate that this runtime's prerequisites are present before
+   * it is exercised by `ao spawn`. Throw with an actionable, human-readable
+   * message; the CLI catches and formats the error.
+   */
+  preflight?(context: PreflightContext): Promise<void>;
 }
 
 export interface RuntimeCreateConfig {
@@ -456,15 +463,6 @@ export interface Agent {
 
   /** Process name to look for (e.g. "claude", "codex", "aider") */
   readonly processName: string;
-
-  /**
-   * How the initial prompt should be delivered to the agent.
-   * - "inline" (default): prompt is included in the launch command (e.g. -p flag)
-   * - "post-launch": prompt is sent via runtime.sendMessage() after the agent starts,
-   *   keeping the agent in interactive mode. Use this for agents where inlining
-   *   the prompt causes one-shot/exit behavior (e.g. Claude Code's -p flag).
-   */
-  readonly promptDelivery?: "inline" | "post-launch";
 
   /** Get the shell command to launch this agent */
   getLaunchCommand(config: AgentLaunchConfig): string;
@@ -515,7 +513,7 @@ export interface Agent {
 
   /**
    * Optional: Set up agent-specific hooks/config in the workspace for automatic metadata updates.
-   * Called once per workspace during ao init/start and when creating new worktrees.
+   * Called once per workspace during ao start and when creating new worktrees.
    *
    * Each agent plugin implements this for their own config format:
    * - Claude Code: writes .claude/settings.json with PostToolUse hook
@@ -540,6 +538,12 @@ export interface Agent {
    * `getActivityState` already reads richer data from the agent's own session files.
    */
   recordActivity?(session: Session, terminalOutput: string): Promise<void>;
+
+  /**
+   * Optional: validate that this agent's prerequisites are present before
+   * it is exercised by `ao spawn`. Throw with an actionable error message.
+   */
+  preflight?(context: PreflightContext): Promise<void>;
 }
 
 export interface AgentLaunchConfig {
@@ -590,7 +594,7 @@ export interface AgentLaunchConfig {
 export interface WorkspaceHooksConfig {
   /** Data directory where session metadata files are stored */
   dataDir: string;
-  /** Optional session ID (may not be known at ao init time) */
+  /** Optional session ID (may not be known at workspace setup time) */
   sessionId?: string;
 }
 
@@ -632,6 +636,12 @@ export interface Workspace {
   /** List existing workspaces for a project */
   list(projectId: string): Promise<WorkspaceInfo[]>;
 
+  /**
+   * Optional: find a pre-existing AO-managed workspace that already tracks the
+   * requested branch and can be adopted instead of creating a fresh workspace.
+   */
+  findManagedWorkspace?(config: WorkspaceCreateConfig): Promise<WorkspaceInfo | null>;
+
   /** Optional: run hooks after workspace creation (symlinks, installs, etc.) */
   postCreate?(info: WorkspaceInfo, project: ProjectConfig): Promise<void>;
 
@@ -640,6 +650,12 @@ export interface Workspace {
 
   /** Optional: restore a workspace (e.g. recreate a worktree for an existing branch) */
   restore?(config: WorkspaceCreateConfig, workspacePath: string): Promise<WorkspaceInfo>;
+
+  /**
+   * Optional: validate that this workspace's prerequisites (e.g. git in PATH,
+   * write access to the worktree root) are present before `ao spawn`.
+   */
+  preflight?(context: PreflightContext): Promise<void>;
 }
 
 export interface WorkspaceCreateConfig {
@@ -694,6 +710,13 @@ export interface Tracker {
 
   /** Optional: create a new issue */
   createIssue?(input: CreateIssueInput, project: ProjectConfig): Promise<Issue>;
+
+  /**
+   * Optional: validate that this tracker's prerequisites (auth tokens, CLI
+   * tools) are present before `ao spawn` runs. Throw with an actionable
+   * error message.
+   */
+  preflight?(context: PreflightContext): Promise<void>;
 }
 
 export interface Issue {
@@ -834,6 +857,14 @@ export interface SCM {
    * @returns Map keyed by "${owner}/${repo}#${number}" containing enrichment data
    */
   enrichSessionsPRBatch?(prs: PRInfo[], observer?: BatchObserver, repos?: string[]): Promise<Map<string, PREnrichmentData>>;
+
+  /**
+   * Optional: validate that this SCM's prerequisites (auth, CLI tools) are
+   * present before `ao spawn` runs. Plugins should consult
+   * `context.intent.willClaimExistingPR` and skip PR-write prereqs when the
+   * spawn won't exercise them.
+   */
+  preflight?(context: PreflightContext): Promise<void>;
 }
 
 /**
@@ -1464,6 +1495,9 @@ export interface ProjectConfig {
   /** Override default workspace */
   workspace?: string;
 
+  /** Environment variables forwarded into worker session runtimes (AO_* internals always win) */
+  env?: Record<string, string>;
+
   /** Issue tracker configuration */
   tracker?: TrackerConfig;
 
@@ -1662,6 +1696,32 @@ export interface PluginModule<T = unknown> {
 
   /** Optional: detect whether this plugin's runtime/binary is available on the system. */
   detect?(): boolean;
+}
+
+/**
+ * Context passed to a plugin's `preflight()` method.
+ *
+ * Describes the **intent** of the operation (what it will do), not the CLI
+ * flags that triggered it. Plugins should never know about specific flag
+ * names — translate flags into intent at the CLI boundary so adding a new
+ * flag doesn't ripple into every plugin that cares about a related operation.
+ */
+export interface PreflightContext {
+  /** The project the operation runs against. */
+  project: ProjectConfig;
+
+  /** What the operation will do. Plugins decide whether their prereqs apply. */
+  intent: {
+    /** Whether the spawn is for a worker session or the orchestrator. */
+    role: "worker" | "orchestrator";
+
+    /**
+     * Whether the operation will exercise SCM PR-write paths
+     * (e.g. claiming an existing PR for the new session). When false, an SCM
+     * plugin's preflight can skip PR-write prereqs.
+     */
+    willClaimExistingPR: boolean;
+  };
 }
 
 // =============================================================================
