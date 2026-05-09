@@ -159,8 +159,12 @@ function renderInline(text: string): ReactNode[] {
 
 function sanitizeUrl(raw: string): string | null {
   // Only http(s). Reject javascript:, data:, vbscript:, file:, mailto:, etc.
-  // Accept relative URLs starting with "/" (same-origin) for completeness.
-  if (raw.startsWith("/")) return raw;
+  // Accept SAME-ORIGIN relative URLs starting with a single "/" — but reject
+  // protocol-relative URLs starting with "//" because browsers treat
+  // href="//attacker.com" as "https://attacker.com" (it's NOT same-origin).
+  // An agent emitting [click](//attacker.com) would otherwise produce a
+  // clickable link to an arbitrary external host.
+  if (raw.startsWith("/") && !raw.startsWith("//")) return raw;
   try {
     const u = new URL(raw);
     if (u.protocol === "http:" || u.protocol === "https:") return u.href;

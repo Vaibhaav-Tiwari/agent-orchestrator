@@ -45,6 +45,20 @@ describe("CanvasMarkdown safe-link rendering", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
 
+  it("rejects protocol-relative URLs (//attacker.com) — greptile P1", () => {
+    // raw.startsWith("/") would otherwise admit //attacker.com which the
+    // browser resolves to https://attacker.com — NOT same-origin.
+    render(<CanvasMarkdown canvas={md("Visit [their site](//attacker.com) now.")} />);
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByText(/their site/)).toBeInTheDocument();
+  });
+
+  it("still accepts genuine same-origin paths starting with single slash", () => {
+    render(<CanvasMarkdown canvas={md("Open [the rail](/projects/foo/sessions/ao-1).")} />);
+    const a = screen.getByRole("link", { name: "the rail" });
+    expect(a).toHaveAttribute("href", "/projects/foo/sessions/ao-1");
+  });
+
   it("rejects malformed URLs gracefully", () => {
     render(<CanvasMarkdown canvas={md("[broken](not a real url with spaces)")} />);
     // The regex requires a non-space URL; this case won't even match the link
