@@ -192,7 +192,6 @@
       <li><a href="#deferred">What's deliberately not in v0.1</a></li>
       <li><a href="#paranoia">Built with paranoia</a></li>
       <li><a href="#more">Where to read more</a></li>
-      <li><a href="#first-uses">Suggested first uses</a></li>
     </ul>
   </nav>
 
@@ -279,9 +278,47 @@ EOF
   <h2 id="mobile">Mobile: not supported in v0.1</h2>
   <p>Canvases are a desktop-only feature for now. On viewports below the mobile breakpoint the rail isn't rendered at all — the session detail page falls back to its existing single-column layout. We'll revisit a proper mobile experience (likely a bottom sheet or full-screen takeover) once the desktop surface settles.</p>
 
-  <h2 id="extensible">How extensible is this?</h2>
-  <p>Third parties can ship canvases without forking AO. The contract is <strong>expressive data, constrained UI</strong> — anyone can supply data in any of the 4 renderer types, but no third party ships React into the supervisor dashboard. Trade-off: new canvas <em>types</em> (e.g. <code>timeline</code>, <code>chart</code>) need a core PR; new canvas <em>content</em> needs nothing.</p>
-  <p>A <code>CanvasProducer</code> interface is declared in core for v0.2, when agent / SCM / tracker plugins will be invoked to synthesize canvases programmatically. v0.1 only invokes the file reader plus the synthesized git-diff producer.</p>
+  <h2 id="extensible">How to extend it</h2>
+  <p>Three tiers of effort, smallest first.</p>
+
+  <h3>Tier 1 — Zero code: emit JSON</h3>
+  <p>Write a file matching one of the 4 schemas to <code>{workspacePath}/.ao/canvases/{id}.json</code>. The dashboard polls every 5s and renders it. This is what 90% of agents will do.</p>
+  <p>Examples that fit today with no extra work:</p>
+  <ul>
+    <li><strong>Test runner agent</strong> → <code>table</code> with name / status / duration columns</li>
+    <li><strong>Codex review agent</strong> → <code>markdown</code> with the structured findings</li>
+    <li><strong>Cost tracker</strong> → <code>stats</code> with token counts, request count, dollar estimates</li>
+    <li><strong>Lint runner</strong> → <code>table</code> with file / rule / message columns</li>
+    <li><strong>Security scanner</strong> → <code>markdown</code> with severity-grouped findings</li>
+    <li><strong>Build dashboard</strong> → <code>stats</code> with build time, bundle size, asset count</li>
+  </ul>
+
+  <h3>Tier 2 — A producer plugin (v0.2, queued)</h3>
+  <p>If you want to <em>synthesize</em> canvases from session data instead of having an agent emit them, implement <code>CanvasProducer</code> on an existing plugin. The interface already exists in core:</p>
+  <pre><code>interface CanvasProducer {
+  listCanvases(session: Session, project: ProjectConfig): Promise&lt;CanvasArtifact[]&gt;;
+}</code></pre>
+  <p>This is what a future <code>scm-github</code> plugin would do to surface a "PR status" stats canvas, or what a <code>tracker-linear</code> plugin would do for "linked issues" tables. v0.1 declares the interface but doesn't invoke it yet — once v0.2 lands, every plugin slot (agent / SCM / tracker) gets called automatically when the API loads canvases.</p>
+  <p>Effort: ~30 lines per producer. No dashboard changes, no schema changes, no PR review of UI code.</p>
+
+  <h3>Tier 3 — A new renderer type</h3>
+  <p>If your data genuinely doesn't fit <code>markdown</code> / <code>diff</code> / <code>table</code> / <code>stats</code> (e.g. a flame graph, a Gantt chart, a network topology), you add a new <code>CanvasType</code> to core. That's:</p>
+  <ol>
+    <li>Extend the <code>CanvasArtifact</code> discriminated union in <a href="../packages/core/src/types.ts"><code>types.ts</code></a> and the matching Zod schema in <a href="../packages/core/src/canvas-schema.ts"><code>canvas-schema.ts</code></a>.</li>
+    <li>Write a <code>Canvas{NewType}.tsx</code> renderer in <code>packages/web/src/components/</code>.</li>
+    <li>Add a <code>case</code> to the switch in <a href="../packages/web/src/components/CanvasRail.tsx"><code>CanvasRail.tsx</code></a>.</li>
+    <li>Tests plus a paragraph in <a href="canvases.md"><code>docs/canvases.md</code></a>.</li>
+  </ol>
+  <p>Effort: ~half a day, gated behind a core PR. Worth it when at least 2 real callers need the same shape.</p>
+
+  <h3>The trade-off — and what we deliberately won't do</h3>
+  <p>Third parties can ship canvases without forking AO, but they cannot ship arbitrary React components that the dashboard runs. The contract is <strong>expressive data, constrained UI</strong>:</p>
+  <ul>
+    <li>Anyone supplies any data, in any of the supported types — <strong>no permission needed</strong>.</li>
+    <li>Anyone proposes a new type via PR — <strong>review needed because it's UI in core</strong>.</li>
+    <li>Nobody ships JS into the supervisor dashboard — <strong>never planned</strong>.</li>
+  </ul>
+  <p>This keeps the install one-step (no per-plugin bundling), the renderer set consistent across every AO instance, and the supervisor sandbox-safe (no third-party code in the app shell).</p>
 
   <h2 id="deferred">What's deliberately not in v0.1</h2>
   <ul>
@@ -313,14 +350,6 @@ EOF
     <li><a href="../packages/core/src/types.ts"><code>packages/core/src/types.ts</code></a> — <code>CanvasArtifact</code>, <code>CanvasProducer</code>, supporting types</li>
     <li><a href="../packages/core/src/canvas-log.ts"><code>packages/core/src/canvas-log.ts</code></a> — file reader plus git-diff synthesizer</li>
     <li><a href="../packages/web/src/components/CanvasRail.tsx"><code>packages/web/src/components/CanvasRail.tsx</code></a> — the right-rail component</li>
-  </ul>
-
-  <h2 id="first-uses">Suggested first uses</h2>
-  <ul>
-    <li><strong>Test runner agent</strong> → emit a <code>table</code> after each test run with name / status / duration columns</li>
-    <li><strong>Codex review agent</strong> → emit a <code>markdown</code> canvas with the structured findings</li>
-    <li><strong>Cost-tracking agent</strong> → emit a <code>stats</code> canvas with token counts, request count, dollar estimates</li>
-    <li><strong>Refactor agent</strong> → the synthesized <code>core-git-diff</code> already shows the change set; nothing to do</li>
   </ul>
 
   <footer>
