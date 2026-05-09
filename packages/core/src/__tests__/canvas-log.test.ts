@@ -134,6 +134,44 @@ describe("CanvasArtifactSchema", () => {
     const result = CanvasArtifactSchema.safeParse({ ...validMarkdown, id: "BAD ID" });
     expect(result.success).toBe(false);
   });
+
+  it("rejects diff canvases with too many hunk lines", () => {
+    // 1001 lines exceeds DIFF_MAX_LINES_PER_HUNK (1000). This is the cap that
+    // prevents agent-emitted diffs from rendering hundreds of thousands of DOM
+    // rows on every 5s poll.
+    const tooManyLines = Array.from({ length: 1001 }, (_, i) => ({
+      kind: "context" as const,
+      text: `line ${i}`,
+    }));
+    const result = CanvasArtifactSchema.safeParse({
+      version: 1,
+      id: "huge",
+      type: "diff",
+      title: "Too many lines",
+      createdAt: "2026-05-06T00:00:00Z",
+      updatedAt: "2026-05-06T00:00:00Z",
+      payload: { files: [{ path: "a.ts", status: "modified", hunks: [{ header: "@@", lines: tooManyLines }] }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects diff canvases with too many files", () => {
+    const tooManyFiles = Array.from({ length: 201 }, (_, i) => ({
+      path: `f${i}.ts`,
+      status: "modified" as const,
+      hunks: [],
+    }));
+    const result = CanvasArtifactSchema.safeParse({
+      version: 1,
+      id: "wide",
+      type: "diff",
+      title: "Too many files",
+      createdAt: "2026-05-06T00:00:00Z",
+      updatedAt: "2026-05-06T00:00:00Z",
+      payload: { files: tooManyFiles },
+    });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("parseUnifiedDiff", () => {

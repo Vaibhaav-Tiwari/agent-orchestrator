@@ -24,10 +24,19 @@ const diffLine = z
   })
   .strict();
 
+// Bounds matching the synthesized git-diff path's caps in canvas-log.ts.
+// Without these, an agent-emitted diff canvas could pack tens of thousands of
+// hunk lines into a 256 KB payload and stall the session detail page on every
+// 5s poll. Numbers chosen to be generous for legitimate review/refactor diffs
+// while preventing DOM blowup. See canvas-log.ts: DIFF_MAX_FILES, DIFF_MAX_LINES.
+const DIFF_MAX_LINES_PER_HUNK = 1000;
+const DIFF_MAX_HUNKS_PER_FILE = 50;
+const DIFF_MAX_FILES_PER_CANVAS = 200;
+
 const diffHunk = z
   .object({
     header: z.string(),
-    lines: z.array(diffLine),
+    lines: z.array(diffLine).max(DIFF_MAX_LINES_PER_HUNK),
   })
   .strict();
 
@@ -36,13 +45,13 @@ const diffFile = z
     path: z.string().min(1),
     oldPath: z.string().optional(),
     status: z.enum(["added", "modified", "deleted", "renamed"]),
-    hunks: z.array(diffHunk),
+    hunks: z.array(diffHunk).max(DIFF_MAX_HUNKS_PER_FILE),
   })
   .strict();
 
 const diffPayload = z
   .object({
-    files: z.array(diffFile),
+    files: z.array(diffFile).max(DIFF_MAX_FILES_PER_CANVAS),
   })
   .strict();
 
