@@ -315,6 +315,10 @@ export type {
 } from "./global-config.js";
 export { UpdateChannelSchema, InstallMethodOverrideSchema } from "./global-config.js";
 
+// Channel-aware semver comparison shared by the CLI's update-check and the
+// dashboard's /api/version route.
+export { isVersionOutdated } from "./version-compare.js";
+
 export { loadEffectiveProjectConfig, iterateAllProjects } from "./project-resolver.js";
 
 // Config generator — auto-generate config from repo URL

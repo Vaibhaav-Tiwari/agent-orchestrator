@@ -11,9 +11,11 @@
 import { existsSync } from "node:fs";
 import chalk from "chalk";
 import {
+  getDefaultRuntime,
   getGlobalConfigPath,
   loadGlobalConfig,
   saveGlobalConfig,
+  UpdateChannelSchema,
   type GlobalConfig,
   type UpdateChannel,
 } from "@aoagents/ao-core";
@@ -34,11 +36,11 @@ interface PromptDeps {
  * Has the user already been asked about update channels?
  *
  * True when:
- *   - The global config exists AND has `updateChannel` set, OR
- *   - The global config does not exist yet (we'll ask after it's created).
+ *   - The global config exists AND has `updateChannel` set.
  *
- * Returns `false` only when the file exists but the field is unset — that's
- * the one window where we want to ask.
+ * False when:
+ *   - The global config does not exist yet (first run — prompt fires immediately).
+ *   - The global config exists but `updateChannel` is unset (existing user, pre-onboarding).
  */
 export function hasChosenUpdateChannel(): boolean {
   if (!existsSync(getGlobalConfigPath())) return false;
@@ -53,6 +55,10 @@ export function hasChosenUpdateChannel(): boolean {
 /**
  * Persist the chosen channel to the global config.
  * Loads existing config (or creates a new one) and writes the field.
+ *
+ * Uses `getDefaultRuntime()` for the runtime default so a Windows user who
+ * dismisses the channel prompt doesn't end up with `runtime: "tmux"` locked
+ * in their config.
  */
 export function persistUpdateChannel(channel: UpdateChannel): void {
   const path = getGlobalConfigPath();
@@ -63,7 +69,7 @@ export function persistUpdateChannel(channel: UpdateChannel): void {
         port: 3000,
         readyThresholdMs: 300_000,
         defaults: {
-          runtime: "tmux",
+          runtime: getDefaultRuntime(),
           agent: "claude-code",
           workspace: "worktree",
           notifiers: ["composio", "desktop"],
@@ -105,20 +111,25 @@ export async function maybePromptForUpdateChannel(deps: PromptDeps = {}): Promis
   );
 
   const promptFn = deps.prompt ?? defaultPrompt;
-  let choice: UpdateChannel | "skip";
+  let raw: UpdateChannel | "skip" | undefined;
   try {
-    choice = await promptFn("Update channel:", [
+    raw = await promptFn("Update channel:", [
       { value: "stable", label: "Stable — weekly releases. Recommended for most users.", hint: "@latest" },
       { value: "nightly", label: "Nightly — daily builds. Bleeding edge.", hint: "@nightly" },
       { value: "manual", label: "Manual — no checks. Run `ao update` yourself.", hint: "default if dismissed" },
     ]);
   } catch {
-    choice = "manual";
+    raw = "manual";
   }
 
   // Never re-prompt: the absence of `updateChannel` is the signal we use to
   // know we haven't asked yet, so even on dismissal we must persist *something*.
-  const channel: UpdateChannel = choice === "skip" ? "manual" : choice;
+  // Validate against the schema before writing — never persist `undefined` or
+  // an unrecognized string (which would corrupt the config and re-trigger
+  // every Zod parse path with `.catch(undefined)` fallbacks).
+  const candidate = raw === "skip" || raw === undefined ? "manual" : raw;
+  const parsed = UpdateChannelSchema.safeParse(candidate);
+  const channel: UpdateChannel = parsed.success ? parsed.data : "manual";
   persistUpdateChannel(channel);
   console.log(chalk.green(`  ✓ Update channel set to ${chalk.bold(channel)}`));
   console.log(

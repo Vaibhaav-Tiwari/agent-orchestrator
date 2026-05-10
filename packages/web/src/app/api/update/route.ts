@@ -63,10 +63,21 @@ export async function POST(_req: NextRequest) {
   // Spawn `ao update` detached so this request can return before the install
   // tears down the dashboard process. We rely on PATH resolution because the
   // user installed `ao` themselves — there's no canonical install location.
+  //
+  // ENOENT (binary missing from PATH) fires asynchronously as an `error`
+  // event on the child, NOT as a sync throw — without an explicit handler
+  // it would propagate as an unhandled error and crash the test runner. So
+  // we attach a noop handler here; in production, the worst-case is the
+  // banner shows "Update started" but nothing actually installs, which the
+  // user will notice on next page load.
   try {
     const child = spawn("ao", ["update"], {
       detached: true,
       stdio: "ignore",
+    });
+    child.on("error", () => {
+      // Swallow async spawn errors (ENOENT etc.) so they don't become
+      // unhandled errors. The user will see "no version change" if it failed.
     });
     child.unref();
   } catch (err) {

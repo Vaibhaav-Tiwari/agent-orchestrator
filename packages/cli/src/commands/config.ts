@@ -10,6 +10,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import {
+  getDefaultRuntime,
   getGlobalConfigPath,
   loadGlobalConfig,
   saveGlobalConfig,
@@ -38,7 +39,7 @@ function loadOrInit(): GlobalConfig {
     port: 3000,
     readyThresholdMs: 300_000,
     defaults: {
-      runtime: "tmux",
+      runtime: getDefaultRuntime(),
       agent: "claude-code",
       workspace: "worktree",
       notifiers: ["composio", "desktop"],

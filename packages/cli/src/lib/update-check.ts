@@ -16,6 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
+  isVersionOutdated as coreIsVersionOutdated,
   loadGlobalConfig,
   type UpdateChannel,
   type InstallMethodOverride,
@@ -602,76 +603,9 @@ export function scheduleBackgroundRefresh(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns true if `current` is an older version than `latest`.
- *
- * Compares numeric major/minor/patch first, then handles prereleases:
- *   - When base versions are equal:
- *       prerelease vs stable     → prerelease is OLDER (`0.5.0-nightly < 0.5.0`)
- *       prerelease vs prerelease → compare the prerelease identifiers
- *                                  segment-by-segment (numeric or lexical),
- *                                  so `0.5.0-nightly-abc < 0.5.0-nightly-def`
- *                                  works for SHA-suffixed snapshots.
- *
- * Channel-aware comparison happens at the *cache layer* (we only cache the
- * tag we're tracking), so this function just answers: is current < latest?
+ * Re-export the core implementation so CLI consumers (and the existing test
+ * suite) keep importing from this module while the dashboard imports the same
+ * function from `@aoagents/ao-core` — single source of truth for the prerelease
+ * comparison rules.
  */
-export function isVersionOutdated(current: string, latest: string): boolean {
-  const parseVersion = (version: string) => {
-    const [base, ...rest] = version.split("-");
-    const prerelease = rest.length > 0 ? rest.join("-") : undefined;
-    return {
-      parts: (base ?? "").split(".").map(Number),
-      prerelease,
-    };
-  };
-
-  const c = parseVersion(current);
-  const l = parseVersion(latest);
-
-  for (let i = 0; i < 3; i++) {
-    const cp = c.parts[i] ?? 0;
-    const lp = l.parts[i] ?? 0;
-    if (Number.isNaN(cp) || Number.isNaN(lp)) return false;
-    if (cp < lp) return true;
-    if (cp > lp) return false;
-  }
-
-  // Numeric base equal — compare prerelease tags.
-  if (!c.prerelease && !l.prerelease) return false;
-  if (c.prerelease && !l.prerelease) return true; // prerelease < stable
-  if (!c.prerelease && l.prerelease) return false; // stable > prerelease
-  // Both prereleases — segment-by-segment comparison.
-  return comparePrereleaseSegments(c.prerelease ?? "", l.prerelease ?? "") < 0;
-}
-
-/**
- * Compare two prerelease identifiers segment-by-segment.
- * Returns -1 if a < b, 0 if equal, 1 if a > b.
- *
- * Per semver: numeric segments compare numerically; non-numeric compare
- * lexically; numeric < non-numeric; longer wins when all shared segments
- * are equal.
- */
-function comparePrereleaseSegments(a: string, b: string): number {
-  const aSeg = a.split(".");
-  const bSeg = b.split(".");
-  const max = Math.max(aSeg.length, bSeg.length);
-  for (let i = 0; i < max; i++) {
-    const ax = aSeg[i];
-    const bx = bSeg[i];
-    if (ax === undefined) return -1;
-    if (bx === undefined) return 1;
-    const aNum = /^\d+$/.test(ax);
-    const bNum = /^\d+$/.test(bx);
-    if (aNum && bNum) {
-      const an = Number(ax);
-      const bn = Number(bx);
-      if (an !== bn) return an < bn ? -1 : 1;
-    } else if (aNum !== bNum) {
-      return aNum ? -1 : 1; // numeric < non-numeric
-    } else if (ax !== bx) {
-      return ax < bx ? -1 : 1;
-    }
-  }
-  return 0;
-}
+export const isVersionOutdated = coreIsVersionOutdated;

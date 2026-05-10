@@ -15,7 +15,11 @@ import { homedir } from "node:os";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
-import { loadGlobalConfig, type UpdateChannel } from "@aoagents/ao-core";
+import {
+  isVersionOutdated,
+  loadGlobalConfig,
+  type UpdateChannel,
+} from "@aoagents/ao-core";
 
 export const dynamic = "force-dynamic";
 
@@ -68,60 +72,6 @@ function getCurrentVersion(): string {
       return "0.0.0";
     }
   }
-}
-
-/**
- * Inlined here (rather than importing from CLI) so the web package doesn't
- * take a dependency on `@aoagents/ao-cli`. Same logic as `isVersionOutdated`
- * in `packages/cli/src/lib/update-check.ts` — keep them in sync if either
- * changes (covered by tests on both sides).
- */
-function isVersionOutdated(current: string, latest: string): boolean {
-  const parseVersion = (version: string) => {
-    const [base, ...rest] = version.split("-");
-    const prerelease = rest.length > 0 ? rest.join("-") : undefined;
-    return {
-      parts: (base ?? "").split(".").map(Number),
-      prerelease,
-    };
-  };
-
-  const c = parseVersion(current);
-  const l = parseVersion(latest);
-
-  for (let i = 0; i < 3; i++) {
-    const cp = c.parts[i] ?? 0;
-    const lp = l.parts[i] ?? 0;
-    if (Number.isNaN(cp) || Number.isNaN(lp)) return false;
-    if (cp < lp) return true;
-    if (cp > lp) return false;
-  }
-
-  if (!c.prerelease && !l.prerelease) return false;
-  if (c.prerelease && !l.prerelease) return true;
-  if (!c.prerelease && l.prerelease) return false;
-
-  const aSeg = (c.prerelease ?? "").split(".");
-  const bSeg = (l.prerelease ?? "").split(".");
-  const max = Math.max(aSeg.length, bSeg.length);
-  for (let i = 0; i < max; i++) {
-    const ax = aSeg[i];
-    const bx = bSeg[i];
-    if (ax === undefined) return true;
-    if (bx === undefined) return false;
-    const aNum = /^\d+$/.test(ax);
-    const bNum = /^\d+$/.test(bx);
-    if (aNum && bNum) {
-      const an = Number(ax);
-      const bn = Number(bx);
-      if (an !== bn) return an < bn;
-    } else if (aNum !== bNum) {
-      return aNum;
-    } else if (ax !== bx) {
-      return ax < bx;
-    }
-  }
-  return false;
 }
 
 function resolveChannel(): UpdateChannel {
