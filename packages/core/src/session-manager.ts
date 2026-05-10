@@ -1194,10 +1194,13 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     // step now requires pushing one cleanup, with no risk of forgetting prior
     // ones.
     const cleanupStack = new CleanupStack();
+    let sessionId: string | undefined;
     try {
       // Determine session ID — atomically reserve to prevent concurrent collisions
-      const { sessionId, tmuxName } = await reserveNextSessionIdentity(project, sessionsDir);
-      cleanupStack.push(() => deleteMetadata(sessionsDir, sessionId));
+      let tmuxName: string | undefined;
+      ({ sessionId, tmuxName } = await reserveNextSessionIdentity(project, sessionsDir));
+      const reservedSessionId = sessionId;
+      cleanupStack.push(() => deleteMetadata(sessionsDir, reservedSessionId));
 
       // Determine branch name — explicit branch always takes priority
       let branch: string;
@@ -1463,73 +1466,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // final form. Dismiss the stack so nothing below can trigger a rollback.
       cleanupStack.dismiss();
 
-      // Send the task-specific prompt post-launch for agents that need it
-      // (e.g. Claude Code exits after -p, so we send the prompt after it starts
-      // in interactive mode). Prompt delivery failure must NOT destroy the
-      // session — the agent is running; user can retry with `ao send`.
-      let promptDelivered = false;
-      let promptLastError: Error | undefined;
-      const maxRetries = 3;
-      if (plugins.agent.promptDelivery === "post-launch" && agentLaunchConfig.prompt) {
-        const baseDelayMs = 3_000;
-
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-          try {
-            // Wait for agent to start and be ready for input
-            // Use exponential backoff: 3s, 6s, 9s between attempts
-            await new Promise((resolve) => setTimeout(resolve, baseDelayMs * attempt));
-            await plugins.runtime.sendMessage(handle, agentLaunchConfig.prompt);
-            promptDelivered = true;
-            break;
-          } catch (err) {
-            promptLastError = err instanceof Error ? err : new Error(String(err));
-            console.error(
-              `[session-manager] Prompt delivery attempt ${attempt}/${maxRetries} failed: ${promptLastError.message}`,
-            );
-          }
-        }
-
-        if (!promptDelivered) {
-          console.error(
-            `[session-manager] FAILED to deliver prompt to session ${sessionId} after ${maxRetries} attempts. ` +
-              `User must send manually with 'ao send'. Last error: ${promptLastError?.message}`,
-          );
-        }
-
-        session.metadata["promptDelivered"] = String(promptDelivered);
-      } else if (agentLaunchConfig.prompt) {
-        session.metadata["promptDelivered"] = "true";
-      }
-
-      if (session.metadata["promptDelivered"]) {
-        updateMetadata(sessionsDir, sessionId, session.metadata);
-        invalidateCache();
-      }
-
-      // Emit failure-only AE after metadata has been persisted (B1) and only
-      // when all retries exhausted (B16). Prompt content is intentionally
-      // omitted from `data` because user prompts may include free-form text
-      // (B11 — see #1620 review).
-      if (
-        plugins.agent.promptDelivery === "post-launch" &&
-        agentLaunchConfig.prompt &&
-        !promptDelivered
-      ) {
-        recordActivityEvent({
-          projectId: spawnConfig.projectId,
-          sessionId,
-          source: "session-manager",
-          kind: "session.prompt_delivery_failed",
-          level: "error",
-          summary: `prompt delivery failed after ${maxRetries} retries: ${sessionId}`,
-          data: {
-            attempts: maxRetries,
-            agent: plugins.agent.name,
-            lastError: promptLastError?.message,
-          },
-        });
-      }
-
+      // Prompt is delivered inline via the agent's launch command (positional argument).
+      // No post-launch polling needed — the prompt is part of process invocation.
       recordActivityEvent({
         projectId: spawnConfig.projectId,
         sessionId,
@@ -1546,6 +1484,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       // behavior (cleanup errors don't propagate) but surfaces them for debug.
       recordActivityEvent({
         projectId: spawnConfig.projectId,
+        sessionId,
         source: "session-manager",
         kind: "session.rollback_started",
         level: "warn",
@@ -1557,6 +1496,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         // B25: emit per-step rollback failure so each leaked resource is queryable.
         recordActivityEvent({
           projectId: spawnConfig.projectId,
+          sessionId,
           source: "session-manager",
           kind: "session.rollback_step_failed",
           level: "error",
@@ -1661,7 +1601,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         projectId: orchestratorConfig.projectId,
         sessionId,
         source: "session-manager",
-        kind: "session.spawn_failed",
+        kind: "session.spawn_step_failed",
         level: "error",
         summary: "orchestrator workspace.create failed",
         data: {
@@ -1749,7 +1689,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           projectId: orchestratorConfig.projectId,
           sessionId,
           source: "session-manager",
-          kind: "session.spawn_failed",
+          kind: "session.spawn_step_failed",
           level: "error",
           summary: "orchestrator systemPrompt write failed",
           data: {
@@ -1771,7 +1711,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           projectId: orchestratorConfig.projectId,
           sessionId,
           source: "session-manager",
-          kind: "session.spawn_failed",
+          kind: "session.spawn_step_failed",
           level: "error",
           summary: "orchestrator AGENTS.md write failed",
           data: {
@@ -1808,7 +1748,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         projectId: orchestratorConfig.projectId,
         sessionId,
         source: "session-manager",
-        kind: "session.spawn_failed",
+        kind: "session.spawn_step_failed",
         level: "error",
         summary: "orchestrator opencode session resolution failed",
         data: {
@@ -1874,14 +1814,14 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         },
       });
     } catch (err) {
-      // Outer envelope catches and emits session.spawn_failed; this inner emit
+      // Outer envelope catches and emits session.spawn_failed; this step emit
       // tags the runtime.create failure path specifically so RCA can answer
       // "did the orchestrator runtime fail to start at all?".
       recordActivityEvent({
         projectId: orchestratorConfig.projectId,
         sessionId,
         source: "session-manager",
-        kind: "session.spawn_failed",
+        kind: "session.spawn_step_failed",
         level: "error",
         summary: "orchestrator runtime.create failed",
         data: {
@@ -1981,7 +1921,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         projectId: orchestratorConfig.projectId,
         sessionId,
         source: "session-manager",
-        kind: "session.spawn_failed",
+        kind: "session.spawn_step_failed",
         level: "error",
         summary: "orchestrator post-launch metadata write failed",
         data: {

@@ -11,7 +11,6 @@
  *   - state mutation happens BEFORE event emission
  *   - failure-only emits — no event on a successful send/spawn
  *   - cleanup-stack rollbacks emit per failed step (not in aggregate)
- *   - data payload omits prompt content (`session.prompt_delivery_failed`)
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -19,6 +18,7 @@ import { join } from "node:path";
 import { createSessionManager } from "../session-manager.js";
 import { writeMetadata, readMetadataRaw } from "../metadata.js";
 import { recordActivityEvent } from "../activity-events.js";
+import { getProjectWorktreesDir } from "../paths.js";
 import type { OrchestratorConfig, PluginRegistry, Agent } from "../types.js";
 import { setupTestContext, teardownTestContext, makeHandle, type TestContext } from "./test-utils.js";
 
@@ -125,76 +125,8 @@ describe("session.kill_started (MUST)", () => {
   });
 });
 
-describe("session.prompt_delivery_failed (MUST)", () => {
-  it("emits after all 3 retries exhaust, omitting prompt content", async () => {
-    vi.useFakeTimers();
-    const promptDeliveryAgent: Agent = {
-      name: "prompt-delivery-agent",
-      processName: "pda",
-      promptDelivery: "post-launch",
-      getLaunchCommand: vi.fn().mockReturnValue("agent --start"),
-      getEnvironment: vi.fn().mockReturnValue({}),
-      detectActivity: vi.fn().mockReturnValue("active"),
-      getActivityState: vi.fn().mockResolvedValue({ state: "active" }),
-      isProcessRunning: vi.fn().mockResolvedValue(true),
-      getSessionInfo: vi.fn().mockResolvedValue(null),
-    };
-
-    const originalGet = mockRegistry.get;
-    mockRegistry.get = vi.fn().mockImplementation((slot: string, name?: string) => {
-      if (slot === "agent" && (!name || name === "prompt-delivery-agent")) return promptDeliveryAgent;
-      return (originalGet as any)(slot, name);
-    });
-    config.projects["my-app"]!.agent = "prompt-delivery-agent";
-
-    vi.mocked(ctx.mockRuntime.sendMessage).mockRejectedValue(new Error("PTY closed"));
-
-    const sm = createSessionManager({ config, registry: mockRegistry });
-    const spawnPromise = sm.spawn({ projectId: "my-app", prompt: "secret task content" });
-    await vi.runAllTimersAsync();
-    await spawnPromise;
-
-    const event = findEvent("session.prompt_delivery_failed");
-    expect(event).toBeDefined();
-    expect(event!.level).toBe("error");
-    expect(event!.source).toBe("session-manager");
-    expect(event!.data).toMatchObject({ attempts: 3 });
-    expect(event!.summary).toBe(`prompt delivery failed after 3 retries: ${event!.sessionId}`);
-    expect(JSON.stringify(event!.data ?? {})).not.toContain("secret task content");
-  });
-
-  it("does not emit when prompt delivery succeeds on first attempt", async () => {
-    vi.useFakeTimers();
-    const promptDeliveryAgent: Agent = {
-      name: "prompt-delivery-agent",
-      processName: "pda",
-      promptDelivery: "post-launch",
-      getLaunchCommand: vi.fn().mockReturnValue("agent --start"),
-      getEnvironment: vi.fn().mockReturnValue({}),
-      detectActivity: vi.fn().mockReturnValue("active"),
-      getActivityState: vi.fn().mockResolvedValue({ state: "active" }),
-      isProcessRunning: vi.fn().mockResolvedValue(true),
-      getSessionInfo: vi.fn().mockResolvedValue(null),
-    };
-
-    const originalGet = mockRegistry.get;
-    mockRegistry.get = vi.fn().mockImplementation((slot: string, name?: string) => {
-      if (slot === "agent" && (!name || name === "prompt-delivery-agent")) return promptDeliveryAgent;
-      return (originalGet as any)(slot, name);
-    });
-    config.projects["my-app"]!.agent = "prompt-delivery-agent";
-
-    const sm = createSessionManager({ config, registry: mockRegistry });
-    const spawnPromise = sm.spawn({ projectId: "my-app", prompt: "task" });
-    await vi.runAllTimersAsync();
-    await spawnPromise;
-
-    expect(findEvent("session.prompt_delivery_failed")).toBeUndefined();
-  });
-});
-
 describe("session.spawn_failed — orchestrator path (MUST)", () => {
-  it("emits when spawnOrchestrator's workspace.create throws", async () => {
+  it("emits one terminal failure plus one stage failure when workspace.create throws", async () => {
     vi.mocked(ctx.mockWorkspace.create).mockRejectedValue(new Error("disk full"));
 
     const sm = createSessionManager({ config, registry: mockRegistry });
@@ -203,14 +135,22 @@ describe("session.spawn_failed — orchestrator path (MUST)", () => {
     ).rejects.toThrow("disk full");
 
     const events = findAllEvents("session.spawn_failed");
-    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(events).toHaveLength(1);
     const orchestratorFailure = events.find((e) => e.data && (e.data as Record<string, unknown>)["role"] === "orchestrator");
     expect(orchestratorFailure).toBeDefined();
     expect(orchestratorFailure!.level).toBe("error");
     expect(orchestratorFailure!.projectId).toBe("my-app");
+
+    const stepEvents = findAllEvents("session.spawn_step_failed");
+    expect(stepEvents).toHaveLength(1);
+    expect(stepEvents[0]!.sessionId).toBe("app-orchestrator");
+    expect(stepEvents[0]!.data).toMatchObject({
+      role: "orchestrator",
+      stage: "workspace_create",
+    });
   });
 
-  it("emits when spawnOrchestrator's runtime.create throws", async () => {
+  it("emits one terminal failure plus one stage failure when runtime.create throws", async () => {
     vi.mocked(ctx.mockRuntime.create).mockRejectedValue(new Error("tmux not found"));
 
     const sm = createSessionManager({ config, registry: mockRegistry });
@@ -219,9 +159,44 @@ describe("session.spawn_failed — orchestrator path (MUST)", () => {
     ).rejects.toThrow("tmux not found");
 
     const events = findAllEvents("session.spawn_failed");
+    expect(events).toHaveLength(1);
     const orchestratorFailure = events.find((e) => e.data && (e.data as Record<string, unknown>)["role"] === "orchestrator");
     expect(orchestratorFailure).toBeDefined();
     expect(orchestratorFailure!.level).toBe("error");
+
+    const stepEvents = findAllEvents("session.spawn_step_failed");
+    expect(stepEvents).toHaveLength(1);
+    expect(stepEvents[0]!.sessionId).toBe("app-orchestrator");
+    expect(stepEvents[0]!.data).toMatchObject({
+      role: "orchestrator",
+      stage: "runtime_create",
+    });
+  });
+});
+
+describe("session.rollback_started/session.rollback_step_failed (MUST)", () => {
+  it("includes reserved sessionId when worker spawn rolls back after reservation", async () => {
+    const workspacePath = join(getProjectWorktreesDir("my-app"), "app-1");
+    vi.mocked(ctx.mockWorkspace.create).mockResolvedValue({
+      path: workspacePath,
+      branch: "feat/test",
+      sessionId: "app-1",
+      projectId: "my-app",
+    });
+    vi.mocked(ctx.mockWorkspace.destroy).mockRejectedValue(new Error("destroy failed"));
+    vi.mocked(ctx.mockRuntime.create).mockRejectedValue(new Error("runtime failed"));
+
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    await expect(sm.spawn({ projectId: "my-app" })).rejects.toThrow("runtime failed");
+
+    const rollbackStarted = findEvent("session.rollback_started");
+    expect(rollbackStarted).toBeDefined();
+    expect(rollbackStarted!.sessionId).toBe("app-1");
+
+    const rollbackStepFailed = findEvent("session.rollback_step_failed");
+    expect(rollbackStepFailed).toBeDefined();
+    expect(rollbackStepFailed!.sessionId).toBe("app-1");
+    expect(rollbackStepFailed!.data).toMatchObject({ reason: "destroy failed" });
   });
 });
 
