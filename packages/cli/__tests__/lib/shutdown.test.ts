@@ -35,6 +35,7 @@ const {
 }));
 
 vi.mock("@aoagents/ao-core", async (importOriginal) => {
+  // eslint-disable-next-line @typescript-eslint/consistent-type-imports
   const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
   return {
     ...actual,
@@ -184,6 +185,37 @@ describe("shutdown handlers — activity events", () => {
     // Failure path should NOT emit shutdown_completed
     const completedEvents = events.filter((e) => e.kind === "cli.shutdown_completed");
     expect(completedEvents).toHaveLength(0);
+  });
+
+  it("still unregisters running state when writing last-stop state fails", async () => {
+    const { installShutdownHandlers } = await import("../../src/lib/shutdown.js");
+    mockListSessions.mockResolvedValue([
+      {
+        id: "s1",
+        projectId: "p1",
+        status: "working",
+      },
+    ]);
+    mockWriteLastStop.mockRejectedValue(new Error("disk full"));
+
+    installShutdownHandlers({ configPath: "/tmp/cfg.yaml", projectId: "p1" });
+
+    process.emit("SIGTERM", "SIGTERM");
+    await flushAsync();
+
+    expect(mockWriteLastStop).toHaveBeenCalled();
+    expect(mockUnregister).toHaveBeenCalled();
+
+    const events = recordedEvents();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "cli.shutdown_failed",
+        source: "cli",
+        level: "error",
+        data: expect.objectContaining({ errorMessage: "disk full" }),
+      }),
+    );
+    expect(events.filter((e) => e.kind === "cli.shutdown_completed")).toHaveLength(0);
   });
 
   it("emits cli.shutdown_force_exit when the 10s timer fires", async () => {

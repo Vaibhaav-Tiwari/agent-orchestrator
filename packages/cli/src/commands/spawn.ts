@@ -258,9 +258,7 @@ async function spawnSession(
     const issueLabel = issueId ? ` for issue #${issueId}` : "";
     const claimLabel = claimedPrUrl ? ` (claimed ${claimedPrUrl})` : "";
     const port = config.port ?? DEFAULT_PORT;
-    spinner.succeed(
-      `Session ${chalk.green(session.id)} spawned${issueLabel}${claimLabel}`,
-    );
+    spinner.succeed(`Session ${chalk.green(session.id)} spawned${issueLabel}${claimLabel}`);
     console.log(`  View:     ${chalk.dim(projectSessionUrl(port, projectId, session.id))}`);
 
     // Open terminal tab if requested
@@ -306,7 +304,10 @@ export function registerSpawn(program: Command): void {
     .option("--agent <name>", "Override the agent plugin (e.g. codex, claude-code)")
     .option("--claim-pr <pr>", "Immediately claim an existing PR for the spawned session")
     .option("--assign-on-github", "Assign the claimed PR to the authenticated GitHub user")
-    .option("--prompt <text>", "Initial prompt/instructions for the agent (use instead of an issue)")
+    .option(
+      "--prompt <text>",
+      "Initial prompt/instructions for the agent (use instead of an issue)",
+    )
     .action(
       async (
         issue: string | undefined,
@@ -353,8 +354,34 @@ export function registerSpawn(program: Command): void {
         try {
           await runSpawnPreflight(config, projectId, claimOptions);
           await ensureAOPollingProject(projectId);
+        } catch (err) {
+          recordActivityEvent({
+            projectId,
+            source: "cli",
+            kind: "cli.spawn_failed",
+            level: "error",
+            summary: `ao spawn preflight failed${issueId ? ` for issue ${issueId}` : ""}`,
+            data: {
+              issueId: issueId ?? null,
+              agent: opts.agent ?? null,
+              claimPr: claimOptions.claimPr ?? null,
+              errorMessage: err instanceof Error ? err.message : String(err),
+            },
+          });
+          console.error(chalk.red(`✗ ${err instanceof Error ? err.message : String(err)}`));
+          process.exit(1);
+        }
 
-          await spawnSession(config, projectId, issueId, opts.open, opts.agent, claimOptions, opts.prompt);
+        try {
+          await spawnSession(
+            config,
+            projectId,
+            issueId,
+            opts.open,
+            opts.agent,
+            claimOptions,
+            opts.prompt,
+          );
         } catch (err) {
           console.error(chalk.red(`✗ ${err instanceof Error ? err.message : String(err)}`));
           process.exit(1);
@@ -413,9 +440,7 @@ export function registerBatchSpawn(program: Command): void {
       console.log(banner("BATCH SESSION SPAWNER"));
       console.log();
       for (const [pid, items] of groups) {
-        console.log(
-          `  ${chalk.bold(pid)}: ${items.map((i) => i.original).join(", ")}`,
-        );
+        console.log(`  ${chalk.bold(pid)}: ${items.map((i) => i.original).join(", ")}`);
       }
       console.log();
 

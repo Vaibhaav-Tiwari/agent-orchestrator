@@ -7,11 +7,12 @@
  *   - cli.stop_failed          (outer catch of ao stop action)
  *   - cli.stop_session_failed  (per-session kill failure during ao stop)
  *   - cli.daemon_killed        (SIGTERM sent to parent ao start)
+ *   - cli.start_invoked        (true start action entry)
  *   - cli.start_failed (outer) (outer catch of ao start action)
  *   - cli.restore_session_failed (per-session restore failure)
  *
- * cli.start_invoked, cli.start_failed (orchestrator_setup / supervisor_start)
- * are exercised by the existing start.test.ts infrastructure; this file
+ * cli.start_failed (orchestrator_setup / supervisor_start) is exercised by
+ * the existing start.test.ts infrastructure; this file
  * focuses on emits that are reachable with a small deps surface.
  */
 
@@ -49,6 +50,7 @@ const {
 }));
 
 vi.mock("@aoagents/ao-core", async (importOriginal) => {
+  // eslint-disable-next-line @typescript-eslint/consistent-type-imports
   const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
   return {
     ...actual,
@@ -225,6 +227,7 @@ describe("ao stop — activity events", () => {
     mockGetRunning.mockResolvedValue(null);
     // Make loadConfig throw so we hit the outer catch
     vi.doMock("@aoagents/ao-core", async (importOriginal) => {
+      // eslint-disable-next-line @typescript-eslint/consistent-type-imports
       const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
       return {
         ...actual,
@@ -256,6 +259,7 @@ describe("ao stop — activity events", () => {
 
   it("emits cli.stop_failed when loadConfig throws", async () => {
     vi.doMock("@aoagents/ao-core", async (importOriginal) => {
+      // eslint-disable-next-line @typescript-eslint/consistent-type-imports
       const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
       return {
         ...actual,
@@ -300,6 +304,7 @@ describe("ao stop — activity events", () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
     vi.doMock("@aoagents/ao-core", async (importOriginal) => {
+      // eslint-disable-next-line @typescript-eslint/consistent-type-imports
       const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
       return {
         ...actual,
@@ -357,6 +362,7 @@ describe("ao stop — activity events", () => {
     vi.spyOn(process, "kill").mockImplementation(() => true);
 
     vi.doMock("@aoagents/ao-core", async (importOriginal) => {
+      // eslint-disable-next-line @typescript-eslint/consistent-type-imports
       const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
       return {
         ...actual,
@@ -436,6 +442,16 @@ describe("ao start — activity events (failure paths)", () => {
     }
 
     const events = recordedEvents();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "cli.start_invoked",
+        source: "cli",
+        level: "info",
+        data: expect.objectContaining({
+          projectArg: null,
+        }),
+      }),
+    );
     expect(events).toContainEqual(
       expect.objectContaining({
         kind: "cli.start_failed",

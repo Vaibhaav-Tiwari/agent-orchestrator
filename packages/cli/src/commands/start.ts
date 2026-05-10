@@ -1375,6 +1375,21 @@ export function registerStart(program: Command): void {
           interactive?: boolean;
         },
       ) => {
+        recordActivityEvent({
+          source: "cli",
+          kind: "cli.start_invoked",
+          level: "info",
+          summary: `ao start invoked${projectArg ? ` for ${projectArg}` : ""}`,
+          data: {
+            projectArg: projectArg ?? null,
+            dashboard: opts?.dashboard !== false,
+            orchestrator: opts?.orchestrator !== false,
+            rebuild: opts?.rebuild === true,
+            dev: opts?.dev === true,
+            interactive: opts?.interactive === true,
+          },
+        });
+
         let releaseStartupLock: (() => void) | undefined;
         let startupLockReleased = false;
         const unlockStartup = (): void => {
@@ -1646,18 +1661,6 @@ export function registerStart(program: Command): void {
             port: actualPort,
             startedAt: new Date().toISOString(),
             projects: listLifecycleWorkers(),
-          });
-          recordActivityEvent({
-            projectId,
-            source: "cli",
-            kind: "cli.start_invoked",
-            level: "info",
-            summary: `ao start completed: registered on port ${actualPort}`,
-            data: {
-              pid: process.pid,
-              port: actualPort,
-              projects: listLifecycleWorkers(),
-            },
           });
           unlockStartup();
 

@@ -108,6 +108,7 @@ export function installShutdownHandlers(ctx: ShutdownContext): void {
           }
         }
 
+        let lastStopWriteError: unknown;
         if (killedSessionIds.length > 0) {
           const targetIds = killedSessionIds.filter((id) =>
             activeSessions.some((s) => s.id === id && s.projectId === ctx.projectId),
@@ -124,15 +125,22 @@ export function installShutdownHandlers(ctx: ShutdownContext): void {
           for (const [pid, ids] of otherByProject) {
             otherProjects.push({ projectId: pid, sessionIds: ids });
           }
-          await writeLastStop({
-            stoppedAt: new Date().toISOString(),
-            projectId: ctx.projectId,
-            sessionIds: targetIds,
-            otherProjects: otherProjects.length > 0 ? otherProjects : undefined,
-          });
+          try {
+            await writeLastStop({
+              stoppedAt: new Date().toISOString(),
+              projectId: ctx.projectId,
+              sessionIds: targetIds,
+              otherProjects: otherProjects.length > 0 ? otherProjects : undefined,
+            });
+          } catch (err) {
+            lastStopWriteError = err;
+          }
         }
 
         await unregister();
+        if (lastStopWriteError) {
+          throw lastStopWriteError;
+        }
         recordActivityEvent({
           projectId: ctx.projectId,
           source: "cli",

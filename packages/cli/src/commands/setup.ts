@@ -592,9 +592,9 @@ export async function runSetupAction(opts: SetupOptions): Promise<void> {
   } else if (!openclawConfigWritten) {
     recordActivityEvent({
       source: "cli",
-      kind: "cli.setup_failed",
+      kind: "cli.setup_degraded",
       level: "warn",
-      summary: `failed to write ~/.openclaw/openclaw.json`,
+      summary: `ao setup openclaw completed without writing ~/.openclaw/openclaw.json`,
       data: { reason: "openclaw_json_write_failed" },
     });
   }
