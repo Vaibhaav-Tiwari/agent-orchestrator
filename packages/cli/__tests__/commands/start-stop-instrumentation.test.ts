@@ -6,6 +6,7 @@
  *   - cli.stop_invoked         (start of ao stop action)
  *   - cli.stop_failed          (outer catch of ao stop action)
  *   - cli.stop_session_failed  (per-session kill failure during ao stop)
+ *   - cli.last_stop_write_failed (last-stop persistence failure during ao stop)
  *   - cli.daemon_killed        (SIGTERM sent to parent ao start)
  *   - cli.start_invoked        (true start action entry)
  *   - cli.start_failed (outer) (outer catch of ao start action)
@@ -400,6 +401,74 @@ describe("ao stop — activity events", () => {
         data: expect.objectContaining({ errorMessage: "kill timeout" }),
       }),
     );
+
+    vi.doUnmock("@aoagents/ao-core");
+  });
+
+  it("emits cli.last_stop_write_failed when ao stop cannot persist restore state", async () => {
+    mockGetRunning.mockResolvedValue(null);
+    mockSessionManager.list.mockResolvedValue([
+      {
+        id: "sess-1",
+        projectId: "my-app",
+        status: "working",
+      },
+    ]);
+    mockSessionManager.kill.mockResolvedValue({ cleaned: true, alreadyTerminated: false });
+    mockWriteLastStop.mockRejectedValue(new Error("last-stop lock busy"));
+
+    vi.doMock("@aoagents/ao-core", async (importOriginal) => {
+      // eslint-disable-next-line @typescript-eslint/consistent-type-imports
+      const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
+      return {
+        ...actual,
+        recordActivityEvent: vi.mocked(recordActivityEvent),
+        loadConfig: () => ({
+          configPath: "/tmp/x.yaml",
+          port: 3000,
+          projects: { "my-app": { name: "my-app", path: "/tmp/my-app" } },
+          defaults: {},
+        }),
+        // isTerminalSession returns false so the session is treated as active
+        isTerminalSession: () => false,
+      };
+    });
+
+    vi.resetModules();
+    const reloaded = await import("../../src/commands/start.js");
+    const program = new Command();
+    program.exitOverride();
+    reloaded.registerStop(program);
+
+    await program.parseAsync(["node", "ao", "stop", "my-app"]);
+
+    const events = recordedEvents();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "cli.last_stop_write_failed",
+        source: "cli",
+        level: "error",
+        projectId: "my-app",
+        data: expect.objectContaining({
+          targetSessionCount: 1,
+          totalKilled: 1,
+          errorMessage: "last-stop lock busy",
+        }),
+      }),
+    );
+    expect(events).not.toContainEqual(
+      expect.objectContaining({
+        kind: "cli.last_stop_written",
+      }),
+    );
+    expect(events).not.toContainEqual(
+      expect.objectContaining({
+        kind: "cli.stop_failed",
+      }),
+    );
+    const logs = vi.mocked(console.log).mock.calls.map((c) => String(c[0]));
+    expect(logs.some((line) => line.includes("Could not list sessions"))).toBe(false);
+    expect(logs.some((line) => line.includes("Could not write last-stop state"))).toBe(true);
 
     vi.doUnmock("@aoagents/ao-core");
   });

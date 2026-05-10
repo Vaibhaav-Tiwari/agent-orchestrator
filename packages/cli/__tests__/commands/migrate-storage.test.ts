@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Command } from "commander";
-import { recordActivityEvent } from "@aoagents/ao-core";
+import * as AoCore from "@aoagents/ao-core";
 
 const { mockMigrateStorage, mockRollbackStorage } = vi.hoisted(() => ({
   mockMigrateStorage: vi.fn(),
@@ -12,7 +12,7 @@ const { mockMigrateStorage, mockRollbackStorage } = vi.hoisted(() => ({
 }));
 
 vi.mock("@aoagents/ao-core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
+  const actual = await importOriginal<typeof AoCore>();
   return {
     ...actual,
     migrateStorage: (...args: unknown[]) => mockMigrateStorage(...args),
@@ -24,7 +24,7 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
 import { registerMigrateStorage } from "../../src/commands/migrate-storage.js";
 
 const recordedEvents = (): Array<Record<string, unknown>> =>
-  vi.mocked(recordActivityEvent).mock.calls.map((c) => c[0] as Record<string, unknown>);
+  vi.mocked(AoCore.recordActivityEvent).mock.calls.map((c) => c[0] as Record<string, unknown>);
 
 describe("ao migrate-storage — activity events", () => {
   let program: Command;
@@ -33,7 +33,7 @@ describe("ao migrate-storage — activity events", () => {
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    vi.mocked(recordActivityEvent).mockClear();
+    vi.mocked(AoCore.recordActivityEvent).mockClear();
     mockMigrateStorage.mockReset();
     mockRollbackStorage.mockReset();
 

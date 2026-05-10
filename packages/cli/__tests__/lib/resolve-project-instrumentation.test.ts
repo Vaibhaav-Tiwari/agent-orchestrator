@@ -7,11 +7,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { recordActivityEvent } from "@aoagents/ao-core";
-import type { ParsedRepoUrl } from "@aoagents/ao-core";
+import * as AoCore from "@aoagents/ao-core";
 
 vi.mock("@aoagents/ao-core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
+  const actual = await importOriginal<typeof AoCore>();
   return {
     ...actual,
     recordActivityEvent: vi.fn(),
@@ -19,6 +18,10 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
     // clone path so cloneRepo is invoked (and can throw).
     resolveCloneTarget: () => "/tmp/__ao_test_clone_target__",
     isRepoAlreadyCloned: () => false,
+    loadConfig: () => ({
+      configPath: "/tmp/__ao_test_global_config__",
+      projects: {},
+    }),
   };
 });
 
@@ -37,17 +40,19 @@ vi.mock("../../src/lib/shell.js", () => ({
 import { resolveOrCreateProject } from "../../src/lib/resolve-project.js";
 
 const recordedEvents = (): Array<Record<string, unknown>> =>
-  vi.mocked(recordActivityEvent).mock.calls.map((c) => c[0] as Record<string, unknown>);
+  vi.mocked(AoCore.recordActivityEvent).mock.calls.map((c) => c[0] as Record<string, unknown>);
 
 describe("resolve-project — activity events", () => {
   beforeEach(() => {
-    vi.mocked(recordActivityEvent).mockClear();
+    vi.mocked(AoCore.recordActivityEvent).mockClear();
   });
 
   it("emits cli.project_resolve_failed when cloneRepo throws (URL into running daemon)", async () => {
-    const cloneRepo = vi.fn(async (_parsed: ParsedRepoUrl, _target: string, _cwd: string) => {
-      throw new Error("network down");
-    });
+    const cloneRepo = vi.fn(
+      async (_parsed: AoCore.ParsedRepoUrl, _target: string, _cwd: string) => {
+        throw new Error("network down");
+      },
+    );
 
     await expect(
       resolveOrCreateProject(
@@ -100,10 +105,10 @@ describe("resolve-project — activity events", () => {
 
     // Reach into the same module mock by re-mocking findConfigFile + loadConfig.
     vi.doMock("@aoagents/ao-core", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
+      const actual = await importOriginal<typeof AoCore>();
       return {
         ...actual,
-        recordActivityEvent: vi.mocked(recordActivityEvent),
+        recordActivityEvent: vi.mocked(AoCore.recordActivityEvent),
         // findConfigFile returns a path so the recovery branch runs.
         findConfigFile: () => "/tmp/__ao_test_flat_config__",
         // loadConfig throws a generic Error (not ConfigNotFoundError) so the
@@ -115,9 +120,8 @@ describe("resolve-project — activity events", () => {
     });
 
     vi.resetModules();
-    const { resolveOrCreateProject: resolveOrCreateProjectReloaded } = await import(
-      "../../src/lib/resolve-project.js"
-    );
+    const { resolveOrCreateProject: resolveOrCreateProjectReloaded } =
+      await import("../../src/lib/resolve-project.js");
     // Re-grab the mock so cleared calls inside the doMock factory don't get lost.
     const { recordActivityEvent: reloadedRecord } = await import("@aoagents/ao-core");
     vi.mocked(reloadedRecord).mockClear();
@@ -137,9 +141,7 @@ describe("resolve-project — activity events", () => {
       ),
     ).rejects.toThrow(/malformed config/);
 
-    const events = vi
-      .mocked(reloadedRecord)
-      .mock.calls.map((c) => c[0] as Record<string, unknown>);
+    const events = vi.mocked(reloadedRecord).mock.calls.map((c) => c[0] as Record<string, unknown>);
     expect(events).toContainEqual(
       expect.objectContaining({
         kind: "cli.config_recovery_failed",

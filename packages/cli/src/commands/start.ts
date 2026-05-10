@@ -1911,24 +1911,45 @@ export function registerStop(program: Command): void {
             const targetSessionIds = killedSessionIds.filter((id) =>
               targetActive.some((s) => s.id === id),
             );
-            await writeLastStop({
-              stoppedAt: new Date().toISOString(),
-              projectId: _projectId,
-              sessionIds: targetSessionIds,
-              otherProjects: otherProjects.length > 0 ? otherProjects : undefined,
-            });
-            recordActivityEvent({
-              projectId: _projectId,
-              source: "cli",
-              kind: "cli.last_stop_written",
-              level: "info",
-              summary: `last-stop state written with ${killedSessionIds.length} session(s)`,
-              data: {
-                targetSessionCount: targetSessionIds.length,
-                otherProjectCount: otherProjects.length,
-                totalKilled: killedSessionIds.length,
-              },
-            });
+            try {
+              await writeLastStop({
+                stoppedAt: new Date().toISOString(),
+                projectId: _projectId,
+                sessionIds: targetSessionIds,
+                otherProjects: otherProjects.length > 0 ? otherProjects : undefined,
+              });
+              recordActivityEvent({
+                projectId: _projectId,
+                source: "cli",
+                kind: "cli.last_stop_written",
+                level: "info",
+                summary: `last-stop state written with ${killedSessionIds.length} session(s)`,
+                data: {
+                  targetSessionCount: targetSessionIds.length,
+                  otherProjectCount: otherProjects.length,
+                  totalKilled: killedSessionIds.length,
+                },
+              });
+            } catch (err) {
+              recordActivityEvent({
+                projectId: _projectId,
+                source: "cli",
+                kind: "cli.last_stop_write_failed",
+                level: "error",
+                summary: `failed to write last-stop state during ao stop`,
+                data: {
+                  targetSessionCount: targetSessionIds.length,
+                  otherProjectCount: otherProjects.length,
+                  totalKilled: killedSessionIds.length,
+                  errorMessage: err instanceof Error ? err.message : String(err),
+                },
+              });
+              console.log(
+                chalk.yellow(
+                  `  Could not write last-stop state: ${err instanceof Error ? err.message : String(err)}`,
+                ),
+              );
+            }
           }
         } catch (err) {
           console.log(

@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Command } from "commander";
 import { EventEmitter } from "node:events";
-import { recordActivityEvent } from "@aoagents/ao-core";
+import * as AoCore from "@aoagents/ao-core";
 
 const { mockRunRepoScript } = vi.hoisted(() => ({
   mockRunRepoScript: vi.fn(),
@@ -53,7 +53,7 @@ vi.mock("node:child_process", async () => {
 });
 
 vi.mock("@aoagents/ao-core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@aoagents/ao-core")>();
+  const actual = await importOriginal<typeof AoCore>();
   return {
     ...actual,
     recordActivityEvent: vi.fn(),
@@ -63,7 +63,7 @@ vi.mock("@aoagents/ao-core", async (importOriginal) => {
 import { registerUpdate } from "../../src/commands/update.js";
 
 const recordedEvents = (): Array<Record<string, unknown>> =>
-  vi.mocked(recordActivityEvent).mock.calls.map((c) => c[0] as Record<string, unknown>);
+  vi.mocked(AoCore.recordActivityEvent).mock.calls.map((c) => c[0] as Record<string, unknown>);
 
 function createMockChild(exitCode: number | null, signal?: NodeJS.Signals): EventEmitter {
   const child = new EventEmitter();
@@ -77,7 +77,7 @@ describe("ao update — activity events", () => {
   let origStdoutTTY: boolean | undefined;
 
   beforeEach(() => {
-    vi.mocked(recordActivityEvent).mockClear();
+    vi.mocked(AoCore.recordActivityEvent).mockClear();
     program = new Command();
     program.exitOverride();
     registerUpdate(program);
@@ -111,9 +111,7 @@ describe("ao update — activity events", () => {
     // the throw, which is then re-caught and emits a second event before the
     // final exit. The instrumentation event for the non-zero exit is what
     // matters; whichever final exit code propagates is incidental.
-    await expect(program.parseAsync(["node", "ao", "update"])).rejects.toThrow(
-      /process\.exit/,
-    );
+    await expect(program.parseAsync(["node", "ao", "update"])).rejects.toThrow(/process\.exit/);
 
     const events = recordedEvents();
     expect(events).toContainEqual(
@@ -128,13 +126,9 @@ describe("ao update — activity events", () => {
 
   it("emits cli.update_failed when ao-update.sh script is missing (git path)", async () => {
     mockDetectInstallMethod.mockReturnValue("git");
-    mockRunRepoScript.mockRejectedValue(
-      new Error("Script not found: ao-update.sh"),
-    );
+    mockRunRepoScript.mockRejectedValue(new Error("Script not found: ao-update.sh"));
 
-    await expect(
-      program.parseAsync(["node", "ao", "update"]),
-    ).rejects.toThrow("process.exit(1)");
+    await expect(program.parseAsync(["node", "ao", "update"])).rejects.toThrow("process.exit(1)");
 
     const events = recordedEvents();
     expect(events).toContainEqual(
@@ -161,9 +155,7 @@ describe("ao update — activity events", () => {
     Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
     mockSpawn.mockReturnValue(createMockChild(1));
 
-    await expect(
-      program.parseAsync(["node", "ao", "update"]),
-    ).rejects.toThrow("process.exit(1)");
+    await expect(program.parseAsync(["node", "ao", "update"])).rejects.toThrow("process.exit(1)");
 
     const events = recordedEvents();
     expect(events).toContainEqual(
