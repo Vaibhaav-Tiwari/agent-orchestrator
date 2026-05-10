@@ -88,12 +88,21 @@ export async function POST(request: Request): Promise<Response> {
     const sessionIds = new Set<string>();
     const projectIds = new Set<string>();
     let verified = false;
+    let verificationSupported = false;
+    let unsupportedVerificationCount = 0;
     const errors: string[] = [];
     const parseErrors: string[] = [];
     const lifecycleErrors: string[] = [];
 
     for (const candidate of candidates) {
-      const verification = await candidate.scm.verifyWebhook?.(webhookRequest, candidate.project);
+      if (!candidate.scm.verifyWebhook) {
+        unsupportedVerificationCount += 1;
+        errors.push("Webhook verification not supported by SCM plugin");
+        continue;
+      }
+
+      verificationSupported = true;
+      const verification = await candidate.scm.verifyWebhook(webhookRequest, candidate.project);
       if (!verification?.ok) {
         if (verification?.reason) errors.push(verification.reason);
         continue;
@@ -131,21 +140,34 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     if (!verified) {
+      const unsupportedOnly = !verificationSupported && unsupportedVerificationCount > 0;
       recordActivityEvent({
         source: "api",
         kind: "api.webhook_unverified",
         level: "warn",
-        summary: `webhook signature verification failed for ${slug}`,
+        summary: unsupportedOnly
+          ? `webhook verification unsupported for ${slug}`
+          : `webhook signature verification failed for ${slug}`,
         data: {
           slug,
           remoteAddr,
           candidateCount: candidates.length,
-          reason: errors[0] ?? "verification_failed",
+          verificationSupported,
+          unsupportedVerificationCount,
+          reason: unsupportedOnly
+            ? "verification_unsupported"
+            : (errors[0] ?? "verification_failed"),
         },
       });
       return NextResponse.json(
-        { error: errors[0] ?? "Webhook verification failed", ok: false },
-        { status: 401 },
+        {
+          error: unsupportedOnly
+            ? "Webhook verification not supported by SCM plugin"
+            : (errors[0] ?? "Webhook verification failed"),
+          ok: false,
+          verificationSupported,
+        },
+        { status: unsupportedOnly ? 501 : 401 },
       );
     }
 

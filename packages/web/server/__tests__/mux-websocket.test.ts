@@ -46,7 +46,8 @@ vi.mock("../tmux-utils.js", () => ({
   resolvePipePath: () => null,
 }));
 
-const { SessionBroadcaster, TerminalManager, createMuxWebSocket } = await import("../mux-websocket");
+const { SessionBroadcaster, TerminalManager, createMuxWebSocket } =
+  await import("../mux-websocket");
 
 // Mock global fetch
 const mockFetch = vi.fn();
@@ -413,6 +414,7 @@ describe("mux WebSocket connection events", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     recordActivityEvent.mockClear();
+    resetPtyMock();
   });
 
   afterEach(() => {

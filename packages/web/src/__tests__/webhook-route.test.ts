@@ -195,6 +195,36 @@ describe("POST /api/webhooks/[...slug] — activity events", () => {
     expect(JSON.stringify(call)).not.toContain("bogus");
     expect(call.data["slug"]).toBe("github");
     expect(call.data["remoteAddr"]).toBe("203.0.113.7");
+    expect(call.data["verificationSupported"]).toBe(true);
+    expect(call.data["reason"]).toBe("bad signature");
+  });
+
+  it("distinguishes unsupported webhook verification from failed signatures", async () => {
+    vi.mocked(mockRegistry.get).mockReturnValueOnce({
+      ...mockSCM,
+      verifyWebhook: undefined,
+    } as unknown as SCM);
+
+    const res = await webhookPOST(makeWebhookRequest());
+    expect(res.status).toBe(501);
+
+    expect(verifyWebhook).not.toHaveBeenCalled();
+    expect(parseWebhook).not.toHaveBeenCalled();
+    expect(recordActivityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "api",
+        kind: "api.webhook_unverified",
+        level: "warn",
+        summary: expect.stringContaining("verification unsupported"),
+      }),
+    );
+    const call = recordActivityEvent.mock.calls[0]![0] as {
+      data: Record<string, unknown>;
+    };
+    expect(call.data["slug"]).toBe("github");
+    expect(call.data["verificationSupported"]).toBe(false);
+    expect(call.data["unsupportedVerificationCount"]).toBe(1);
+    expect(call.data["reason"]).toBe("verification_unsupported");
   });
 
   it("emits api.webhook_rejected when content-length exceeds maxBodyBytes (413)", async () => {
@@ -256,9 +286,7 @@ describe("POST /api/webhooks/[...slug] — activity events", () => {
     );
     expect(received).toBeDefined();
     expect((received![0] as { level: string }).level).toBe("warn");
-    expect(
-      (received![0] as { data: Record<string, unknown> }).data["parseErrorCount"],
-    ).toBe(1);
+    expect((received![0] as { data: Record<string, unknown> }).data["parseErrorCount"]).toBe(1);
   });
 
   it("emits api.webhook_failed on 500 outer crash", async () => {

@@ -661,9 +661,7 @@ export function handleWindowsPipeMessage(
               try {
                 const status = JSON.parse(payload.toString("utf-8")) as { alive: boolean };
                 if (!status.alive && ws.readyState === WS_OPEN) {
-                  ws.send(
-                    JSON.stringify({ ch: "terminal", id, type: "exited", code: 0, ...echo }),
-                  );
+                  ws.send(JSON.stringify({ ch: "terminal", id, type: "exited", code: 0, ...echo }));
                 }
               } catch {
                 /* ignore parse errors */
@@ -817,7 +815,14 @@ export function createMuxWebSocket(tmuxPath?: string | null): WebSocketServer | 
             if (type === "open") {
               if (isWindows()) {
                 handleWindowsPipeMessage(
-                  msg as { id: string; type: string; projectId?: string; data?: string; cols?: number; rows?: number },
+                  msg as {
+                    id: string;
+                    type: string;
+                    projectId?: string;
+                    data?: string;
+                    cols?: number;
+                    rows?: number;
+                  },
                   ws,
                   winPipes,
                   winPipeBuffers,
@@ -899,7 +904,13 @@ export function createMuxWebSocket(tmuxPath?: string | null): WebSocketServer | 
             } else if (type === "resize" && "cols" in msg && "rows" in msg) {
               if (isWindows()) {
                 handleWindowsPipeMessage(
-                  msg as { id: string; type: string; projectId?: string; cols: number; rows: number },
+                  msg as {
+                    id: string;
+                    type: string;
+                    projectId?: string;
+                    cols: number;
+                    rows: number;
+                  },
                   ws,
                   winPipes,
                   winPipeBuffers,
@@ -911,7 +922,14 @@ export function createMuxWebSocket(tmuxPath?: string | null): WebSocketServer | 
             } else if (type === "close") {
               if (isWindows()) {
                 handleWindowsPipeMessage(
-                  msg as { id: string; type: string; projectId?: string; data?: string; cols?: number; rows?: number },
+                  msg as {
+                    id: string;
+                    type: string;
+                    projectId?: string;
+                    data?: string;
+                    cols?: number;
+                    rows?: number;
+                  },
                   ws,
                   winPipes,
                   winPipeBuffers,
