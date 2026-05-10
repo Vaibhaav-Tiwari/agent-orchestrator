@@ -49,7 +49,14 @@ describe("/api/filesystem/browse", () => {
     const response = await browseGET(makeRequest("/api/filesystem/browse?path=~"));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ entries: [] });
+    const body = (await response.json()) as {
+      entries: unknown[];
+      current: { isGitRepo: boolean; hasLocalConfig: boolean };
+      roots: Array<{ label: string; path: string }>;
+    };
+    expect(body.entries).toEqual([]);
+    expect(body.current).toEqual({ isGitRepo: false, hasLocalConfig: false });
+    expect(Array.isArray(body.roots)).toBe(true);
   });
 
   it("returns 400 when the requested path contains ..", async () => {
@@ -61,19 +68,33 @@ describe("/api/filesystem/browse", () => {
     await expect(response.json()).resolves.toEqual({ error: "path outside allowed root" });
   });
 
-  it("returns 400 for an absolute path outside HOME", async () => {
+  it.skipIf(process.platform === "win32")("returns 400 for an absolute path outside HOME", async () => {
     // Pick an absolute path outside HOME that actually exists on the platform —
-    // `/etc` exists on POSIX; on Windows we use `C:\\Windows`. The route's
-    // realpath() resolves first, so a non-existent path returns 404 (not 400)
-    // before the outside-root check fires.
-    const outsidePath =
-      process.platform === "win32" ? encodeURIComponent("C:\\Windows") : "/etc";
+    // `/etc` exists on POSIX. The route's realpath() resolves first, so a
+    // non-existent path returns 404 (not 400) before the outside-root check fires.
+    const outsidePath = "/etc";
     const response = await browseGET(
       makeRequest(`/api/filesystem/browse?path=${outsidePath}`),
     );
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "path outside allowed root" });
+  });
+
+  it.runIf(process.platform === "win32")("allows an absolute path outside HOME on Windows", async () => {
+    const response = await browseGET(
+      makeRequest(`/api/filesystem/browse?path=${encodeURIComponent(outsideDir)}`),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      entries: unknown[];
+      current: { isGitRepo: boolean; hasLocalConfig: boolean };
+      roots: Array<{ label: string; path: string }>;
+    };
+    expect(body.entries).toEqual([]);
+    expect(body.current).toEqual({ isGitRepo: false, hasLocalConfig: false });
+    expect(body.roots.some((root) => /^[A-Z]:$/.test(root.label) && root.path.endsWith("\\"))).toBe(true);
   });
 
   // Skipped on Windows: symlinkSync requires admin or Developer Mode on win32
@@ -121,6 +142,8 @@ describe("/api/filesystem/browse", () => {
     };
 
     expect(body).toEqual({
+      current: { isGitRepo: false, hasLocalConfig: false },
+      roots: expect.any(Array),
       entries: [
         {
           name: "notes",

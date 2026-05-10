@@ -4721,9 +4721,33 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
   color: var(--color-text-secondary);
 }
 
+.add-project-modal__location:focus {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+  color: var(--color-text-primary);
+}
+
 .add-project-modal__toolbtn {
   width: 28px;
   height: 28px;
+}
+
+.add-project-modal__drive-select {
+  height: 28px;
+  min-width: 76px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 0;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.add-project-modal__drive-select:focus {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+  color: var(--color-text-primary);
 }
 
 .add-project-modal__toolicon {

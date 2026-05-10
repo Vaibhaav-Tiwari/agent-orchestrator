@@ -1,5 +1,6 @@
-import { readdirSync, type Dirent } from "node:fs";
+import { existsSync, readdirSync, type Dirent } from "node:fs";
 import path from "node:path";
+import { isWindows } from "@aoagents/ao-core";
 import { NextResponse, type NextRequest } from "next/server";
 import {
   PathSecurityError,
@@ -14,6 +15,30 @@ interface BrowseEntry {
   isDirectory: boolean;
   isGitRepo: boolean;
   hasLocalConfig: boolean;
+}
+
+interface BrowseCurrentDirectory {
+  isGitRepo: boolean;
+  hasLocalConfig: boolean;
+}
+
+interface BrowseRoot {
+  label: string;
+  path: string;
+}
+
+function getBrowseRoots(): BrowseRoot[] {
+  if (!isWindows()) return [];
+
+  const roots: BrowseRoot[] = [];
+  for (let code = 65; code <= 90; code += 1) {
+    const drive = String.fromCharCode(code);
+    const rootPath = `${drive}:\\`;
+    if (existsSync(rootPath)) {
+      roots.push({ label: `${drive}:`, path: rootPath });
+    }
+  }
+  return roots;
 }
 
 function isGitRepository(entryPath: string): boolean {
@@ -82,7 +107,12 @@ export async function GET(request: NextRequest) {
         return left.name.localeCompare(right.name);
       });
 
-    return NextResponse.json({ entries });
+    const current: BrowseCurrentDirectory = {
+      isGitRepo: isGitRepository(resolved.resolvedPath),
+      hasLocalConfig: hasLocalConfig(resolved.resolvedPath),
+    };
+
+    return NextResponse.json({ entries, current, roots: getBrowseRoots() });
   } catch {
     return NextResponse.json({ error: "Failed to browse directory" }, { status: 500 });
   }

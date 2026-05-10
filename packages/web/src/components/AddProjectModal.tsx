@@ -22,6 +22,16 @@ interface BrowseEntry {
   modifiedAt?: number;
 }
 
+interface BrowseCurrentDirectory {
+  isGitRepo: boolean;
+  hasLocalConfig: boolean;
+}
+
+interface BrowseRoot {
+  label: string;
+  path: string;
+}
+
 interface CollisionState {
   error: string;
   existingProjectId: string;
@@ -46,6 +56,9 @@ export function AddProjectModal({ open, onClose }: AddProjectModalProps) {
   const [browseHistory, setBrowseHistory] = useState<string[]>(["~"]);
   const [browseHistoryIndex, setBrowseHistoryIndex] = useState(0);
   const [browseEntries, setBrowseEntries] = useState<BrowseEntry[]>([]);
+  const [currentDirectory, setCurrentDirectory] = useState<BrowseCurrentDirectory | null>(null);
+  const [browseRoots, setBrowseRoots] = useState<BrowseRoot[]>([]);
+  const [locationInput, setLocationInput] = useState("~");
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
   const [projectIdInput, setProjectIdInput] = useState("");
@@ -55,6 +68,7 @@ export function AddProjectModal({ open, onClose }: AddProjectModalProps) {
     path: string,
     options?: { mode?: "push" | "replace"; selectedPath?: string; historyIndex?: number },
   ) => {
+    setLocationInput(path);
     setBrowseLoading(true);
     setBrowseError(null);
     try {
@@ -63,6 +77,8 @@ export function AddProjectModal({ open, onClose }: AddProjectModalProps) {
       );
       if (!response) {
         setBrowseEntries([]);
+        setCurrentDirectory(null);
+        setBrowseRoots([]);
         setSelectedBrowsePath(options?.selectedPath ?? path);
         setBrowseError("Failed to browse directories.");
         return;
@@ -73,19 +89,24 @@ export function AddProjectModal({ open, onClose }: AddProjectModalProps) {
           | { error?: string; entries?: BrowseEntry[] }
           | null;
         setBrowseEntries([]);
+        setCurrentDirectory(null);
+        setBrowseRoots([]);
         setSelectedBrowsePath(options?.selectedPath ?? path);
         setBrowseError(body?.error ?? "Failed to browse directories.");
         return;
       }
 
       const body = (await response.json().catch(() => null)) as
-        | { error?: string; entries?: BrowseEntry[] }
+        | { error?: string; entries?: BrowseEntry[]; current?: BrowseCurrentDirectory; roots?: BrowseRoot[] }
         | null;
       const mode = options?.mode ?? "push";
       const targetHistoryIndex = options?.historyIndex ?? browseHistoryIndex;
       setBrowsePath(path);
+      setLocationInput(path);
       setSelectedBrowsePath(options?.selectedPath ?? path);
       setBrowseEntries(body?.entries ?? []);
+      setCurrentDirectory(body?.current ?? null);
+      setBrowseRoots(body?.roots ?? []);
       if (mode === "push") {
         setBrowseHistory((current) => {
           const next = current.slice(0, targetHistoryIndex + 1);
@@ -101,6 +122,8 @@ export function AddProjectModal({ open, onClose }: AddProjectModalProps) {
         });
       }
     } catch {
+      setCurrentDirectory(null);
+      setBrowseRoots([]);
       setBrowseError("Failed to browse directories.");
     } finally {
       setBrowseLoading(false);
@@ -117,7 +140,10 @@ export function AddProjectModal({ open, onClose }: AddProjectModalProps) {
     setBrowseHistory([initialPath]);
     setBrowseHistoryIndex(0);
     setBrowsePath(initialPath);
+    setLocationInput(initialPath);
     setSelectedBrowsePath(initialPath);
+    setCurrentDirectory(null);
+    setBrowseRoots([]);
     setProjectIdInput("");
     setProjectNameInput("");
     modalRef.current?.focus();
@@ -129,7 +155,9 @@ export function AddProjectModal({ open, onClose }: AddProjectModalProps) {
     () => directoryEntries.find((entry) => joinBrowsePath(browsePath, entry.name) === selectedBrowsePath) ?? null,
     [browsePath, directoryEntries, selectedBrowsePath],
   );
+  const selectedCurrentDirectory = selectedBrowsePath === browsePath ? currentDirectory : null;
   const parentPath = getParentBrowsePath(browsePath);
+  const selectedRootPath = browseRoots.find((root) => browsePath.startsWith(root.path))?.path ?? "";
   const canGoBack = browseHistoryIndex > 0;
   const canGoForward = browseHistoryIndex < browseHistory.length - 1;
   const projectIdValue =
@@ -142,7 +170,7 @@ export function AddProjectModal({ open, onClose }: AddProjectModalProps) {
     selectedBrowsePath.trim() !== "" &&
     selectedBrowsePath !== "~" &&
     !browseError &&
-    Boolean(selectedEntry?.isGitRepo) &&
+    Boolean(selectedEntry?.isGitRepo || selectedCurrentDirectory?.isGitRepo) &&
     projectIdValue.length > 0 &&
     projectNameValue.length > 0;
   const selectedIndex = directoryEntries.findIndex(
@@ -258,6 +286,10 @@ export function AddProjectModal({ open, onClose }: AddProjectModalProps) {
     void browse(browseHistory[nextIndex] ?? "~", { mode: "replace", historyIndex: nextIndex });
   };
 
+  const selectedIsKnownNonRepo =
+    Boolean(selectedEntry && !selectedEntry.isGitRepo) ||
+    Boolean(selectedCurrentDirectory && selectedBrowsePath !== "~" && !selectedCurrentDirectory.isGitRepo);
+
   const selectedNotice = collision ? (
     <div className="add-project-modal__notice add-project-modal__notice--warning">
       <p className="add-project-modal__notice-title">{collision.error}</p>
@@ -271,7 +303,7 @@ export function AddProjectModal({ open, onClose }: AddProjectModalProps) {
     </div>
   ) : inlineError ? (
     <div role="alert" className="add-project-modal__notice add-project-modal__notice--error">{inlineError}</div>
-  ) : selectedEntry && !selectedEntry.isGitRepo ? (
+  ) : selectedIsKnownNonRepo ? (
     <div role="alert" className="add-project-modal__notice add-project-modal__notice--error">
       Selected folder is not a git repository.
     </div>
@@ -292,8 +324,35 @@ export function AddProjectModal({ open, onClose }: AddProjectModalProps) {
             <button type="button" onClick={() => navigateHistory(browseHistoryIndex + 1)} disabled={!canGoForward} className="add-project-modal__toolbtn" aria-label="Go forward"><ChevronRightIcon /></button>
             <button type="button" onClick={() => parentPath && void browse(parentPath)} disabled={!parentPath} className="add-project-modal__toolbtn" aria-label="Go up"><ArrowUpIcon /></button>
             <button type="button" onClick={() => void browse(browsePath, { mode: "replace", selectedPath: selectedBrowsePath })} className="add-project-modal__toolbtn" aria-label="Refresh"><RefreshIcon /></button>
+            {browseRoots.length > 0 ? (
+              <select
+                aria-label="Drive"
+                value={selectedRootPath}
+                onChange={(event) => {
+                  const nextPath = event.target.value;
+                  if (nextPath) void browse(nextPath, { selectedPath: nextPath });
+                }}
+                className="add-project-modal__drive-select"
+              >
+                <option value="">Drive</option>
+                {browseRoots.map((root) => (
+                  <option key={root.path} value={root.path}>{root.label}</option>
+                ))}
+              </select>
+            ) : null}
           </div>
-          <div className="add-project-modal__location">{browsePath}</div>
+          <input
+            aria-label="Folder path"
+            value={locationInput}
+            onChange={(event) => setLocationInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              const nextPath = locationInput.trim() || "~";
+              void browse(nextPath, { selectedPath: nextPath });
+            }}
+            className="add-project-modal__location"
+          />
         </div>
 
         <div className="add-project-modal__content">

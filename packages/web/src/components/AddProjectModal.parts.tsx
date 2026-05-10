@@ -1,32 +1,57 @@
 import type { ReactNode } from "react";
 
 const RECENT_PATHS_KEY = "ao:add-project:recent";
+const WINDOWS_DRIVE_ROOT_PATTERN = /^[A-Za-z]:[\\/]?$/;
+const WINDOWS_ABSOLUTE_PATTERN = /^[A-Za-z]:[\\/]/;
+const UNC_ROOT_PATTERN = /^\\\\[^\\]+\\[^\\]+\\?$/;
 
 export function deriveProjectIdFromPath(input: string): string {
-  const segment = input.split("/").filter(Boolean).pop() ?? "project";
+  const segment = input.split(/[\\/]+/).filter(Boolean).pop() ?? "project";
   const normalized = segment.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return normalized || "project";
 }
 
 export function deriveProjectNameFromPath(input: string): string {
-  const segment = input.split("/").filter(Boolean).pop() ?? "Project";
+  const segment = input.split(/[\\/]+/).filter(Boolean).pop() ?? "Project";
   return segment.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim().replace(/\b\w/g, (char) => char.toUpperCase()) || "Project";
 }
 
+function preferredSeparator(input: string): "/" | "\\" {
+  return input.includes("\\") ? "\\" : "/";
+}
+
+function trimBrowsePathEnd(input: string): string {
+  if (WINDOWS_DRIVE_ROOT_PATTERN.test(input) || UNC_ROOT_PATTERN.test(input)) return input;
+  return input.replace(/[\\/]+$/, "");
+}
+
 export function joinBrowsePath(base: string, child: string): string {
-  return base === "~" ? `~/${child}` : `${base.replace(/\/+$/, "")}/${child}`;
+  if (base === "~") return `~/${child}`;
+  const separator = preferredSeparator(base);
+  const normalizedBase = trimBrowsePathEnd(base);
+  if (/[\\/]$/.test(normalizedBase)) return `${normalizedBase}${child}`;
+  return `${normalizedBase}${separator}${child}`;
 }
 
 export function getParentBrowsePath(currentPath: string): string | null {
   if (currentPath === "~") return null;
-  const parts = currentPath.split("/").filter(Boolean);
+  if (WINDOWS_DRIVE_ROOT_PATTERN.test(currentPath) || UNC_ROOT_PATTERN.test(currentPath)) return null;
+  if (WINDOWS_ABSOLUTE_PATTERN.test(currentPath)) {
+    const separator = preferredSeparator(currentPath);
+    const normalizedPath = trimBrowsePathEnd(currentPath);
+    const parts = normalizedPath.split(/[\\/]+/).filter(Boolean);
+    if (parts.length <= 1) return `${parts[0]}${separator}`;
+    if (parts.length === 2) return `${parts[0]}${separator}`;
+    return parts.slice(0, -1).join(separator);
+  }
+  const parts = currentPath.split(/[\\/]+/).filter(Boolean);
   if (parts.length <= 1) return "~";
   return parts[0] === "~" ? `~/${parts.slice(1, -1).join("/")}` : parts.slice(0, -1).join("/");
 }
 
 export function getBreadcrumbs(currentPath: string): Array<{ label: string; path: string }> {
   if (currentPath === "~") return [{ label: "home", path: "~" }];
-  const parts = currentPath.split("/").filter(Boolean);
+  const parts = currentPath.split(/[\\/]+/).filter(Boolean);
   const crumbs: Array<{ label: string; path: string }> = [{ label: "home", path: "~" }];
   let running = "~";
   for (const part of parts.slice(1)) {
