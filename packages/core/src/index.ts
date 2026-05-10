@@ -278,6 +278,7 @@ export {
   isMac,
   getDefaultRuntime,
   getShell,
+  getGitExecutable,
   killProcessTree,
   findPidByPort,
   getEnvDefaults,

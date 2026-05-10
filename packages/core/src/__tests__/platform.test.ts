@@ -1,4 +1,48 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getGitExecutable, isWindows } from "../platform.js";
+
+describe("platform executable resolution", () => {
+  let tempRoot: string;
+  let originalPath: string | undefined;
+  let originalPathExt: string | undefined;
+
+  beforeEach(() => {
+    tempRoot = join(
+      tmpdir(),
+      `ao-platform-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    mkdirSync(tempRoot, { recursive: true });
+    originalPath = process.env["PATH"];
+    originalPathExt = process.env["PATHEXT"];
+  });
+
+  afterEach(() => {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+
+    if (originalPathExt === undefined) delete process.env["PATHEXT"];
+    else process.env["PATHEXT"] = originalPathExt;
+
+    rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+
+  it("resolves git from PATH before falling back to bare git", () => {
+    const binDir = join(tempRoot, "bin");
+    mkdirSync(binDir, { recursive: true });
+
+    const executableName = isWindows() ? "git.EXE" : "git";
+    const executablePath = join(binDir, executableName);
+    writeFileSync(executablePath, "");
+
+    process.env["PATH"] = binDir;
+    process.env["PATHEXT"] = ".EXE";
+
+    expect(getGitExecutable()).toBe(executablePath);
+  });
+});
 
 describe("platform adapter", () => {
   const originalPlatform = process.platform;

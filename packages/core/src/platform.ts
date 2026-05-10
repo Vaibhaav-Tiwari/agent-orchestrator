@@ -53,28 +53,54 @@ function inferShellArgsFlag(cmd: string): (command: string) => string[] {
   return (c) => ["-Command", c];
 }
 
+function pathDelimiterForCurrentPlatform(): string {
+  return isWindows() ? ";" : ":";
+}
+
+function executableExtensions(): string[] {
+  if (!isWindows()) return [""];
+  return [...(process.env["PATHEXT"]?.split(";").filter(Boolean) ?? [".COM", ".EXE", ".BAT", ".CMD"]), ""];
+}
+
 /**
- * Walk PATH looking for an executable. Windows-only: only ever called from
- * resolveWindowsShell. Hard-coded `;` separator and `\` path join regardless
- * of host OS so unit tests that simulate Windows on a Linux CI runner produce
- * canonical Windows paths.
+ * Walk PATH looking for an executable. Uses platform-specific delimiters and
+ * separators so tests can simulate Windows path lookup on any host OS.
  */
 function findOnPath(name: string): string | null {
-  const exts = process.env["PATHEXT"]?.split(";").filter(Boolean) ?? [
-    ".COM",
-    ".EXE",
-    ".BAT",
-    ".CMD",
-  ];
-  const dirs = (process.env["PATH"] ?? "").split(";").filter(Boolean);
+  const dirs = (process.env["PATH"] ?? "").split(pathDelimiterForCurrentPlatform()).filter(Boolean);
   for (const dir of dirs) {
     const base = dir.endsWith("\\") || dir.endsWith("/") ? dir.slice(0, -1) : dir;
-    for (const ext of [...exts, ""]) {
-      const candidate = `${base}\\${name}${ext}`;
+    for (const ext of executableExtensions()) {
+      const candidate = isWindows() ? `${base}\\${name}${ext}` : `${base}/${name}${ext}`;
       if (existsSync(candidate)) return candidate;
     }
   }
   return null;
+}
+
+/**
+ * Resolve Git for child_process.execFile callers.
+ *
+ * Most callers should work with bare "git", but GUI-launched Windows shells can
+ * have Node on PATH without Git. Falling back to standard install paths keeps
+ * worktree setup from failing with a raw ENOENT when Git is installed.
+ */
+export function getGitExecutable(): string {
+  const pathGit = findOnPath("git");
+  if (pathGit) return pathGit;
+
+  const candidates = isWindows()
+    ? [
+        "C:\\Program Files\\Git\\cmd\\git.exe",
+        "C:\\Program Files\\Git\\bin\\git.exe",
+        "C:\\Program Files (x86)\\Git\\cmd\\git.exe",
+        "C:\\Program Files (x86)\\Git\\bin\\git.exe",
+      ]
+    : isMac()
+      ? ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"]
+      : ["/usr/bin/git", "/usr/local/bin/git"];
+
+  return candidates.find((candidate) => existsSync(candidate)) ?? "git";
 }
 
 function resolveWindowsShell(): ShellInfo {
