@@ -291,6 +291,7 @@ export {
   isCanonicalGlobalConfigPath,
   loadGlobalConfig,
   saveGlobalConfig,
+  createDefaultGlobalConfig,
   loadLocalProjectConfig,
   LocalProjectConfigSchema,
   loadLocalProjectConfigDetailed,
@@ -318,6 +319,16 @@ export { UpdateChannelSchema, InstallMethodOverrideSchema } from "./global-confi
 // Channel-aware semver comparison shared by the CLI's update-check and the
 // dashboard's /api/version route.
 export { isVersionOutdated } from "./version-compare.js";
+
+// Cache-layer primitives for the update pipeline. Both the CLI and the
+// dashboard's /api/version route read the same cache file; centralising the
+// path + shape here prevents drift.
+export {
+  getUpdateCheckCachePath,
+  readUpdateCheckCacheRaw,
+  getInstalledAoVersion,
+} from "./update-cache.js";
+export type { UpdateCheckCacheRaw } from "./update-cache.js";
 
 export { loadEffectiveProjectConfig, iterateAllProjects } from "./project-resolver.js";
 

@@ -1063,7 +1063,21 @@ export function migrateToGlobalConfig(oldConfigPath: string, globalConfigPath?: 
 // HELPERS
 // =============================================================================
 
-function makeEmptyGlobalConfig(): GlobalConfig {
+/**
+ * Build a fresh GlobalConfig with all platform-aware defaults filled in.
+ *
+ * Single source of truth for "what does a brand-new global config look like?"
+ * — used by:
+ *   - The internal initial-load path here in core (`makeEmptyGlobalConfig`).
+ *   - `ao config set` (CLI) when no config file exists yet.
+ *   - `maybePromptForUpdateChannel` (CLI) when persisting the user's channel
+ *     pick on first run.
+ *
+ * Critically, `defaults.runtime` is platform-aware via `getDefaultRuntime()`
+ * (returns "process" on Windows, "tmux" elsewhere) — hardcoding "tmux" would
+ * lock Windows users into a non-functional config.
+ */
+export function createDefaultGlobalConfig(): GlobalConfig {
   return {
     port: 3000,
     readyThresholdMs: 300_000,
@@ -1083,6 +1097,11 @@ function makeEmptyGlobalConfig(): GlobalConfig {
     },
     reactions: {},
   };
+}
+
+/** Internal alias for back-compat with existing callers in this file. */
+function makeEmptyGlobalConfig(): GlobalConfig {
+  return createDefaultGlobalConfig();
 }
 
 function sanitizeRawGlobalConfig(raw: Record<string, unknown>): RawGlobalConfigSanitization {

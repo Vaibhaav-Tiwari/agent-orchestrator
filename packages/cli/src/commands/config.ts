@@ -10,7 +10,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import {
-  getDefaultRuntime,
+  createDefaultGlobalConfig,
   getGlobalConfigPath,
   loadGlobalConfig,
   saveGlobalConfig,
@@ -35,25 +35,7 @@ function loadOrInit(): GlobalConfig {
     const config = loadGlobalConfig(path);
     if (config) return config;
   }
-  return {
-    port: 3000,
-    readyThresholdMs: 300_000,
-    defaults: {
-      runtime: getDefaultRuntime(),
-      agent: "claude-code",
-      workspace: "worktree",
-      notifiers: ["composio", "desktop"],
-    },
-    projects: {},
-    notifiers: {},
-    notificationRouting: {
-      urgent: ["desktop", "composio"],
-      action: ["desktop", "composio"],
-      warning: ["composio"],
-      info: ["composio"],
-    },
-    reactions: {},
-  } as GlobalConfig;
+  return createDefaultGlobalConfig();
 }
 
 function setUpdateChannel(value: string): void {

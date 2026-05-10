@@ -10,33 +10,16 @@
  * and `ao update --check` forces a refresh on demand.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { createRequire } from "node:module";
-import { join } from "node:path";
 import { NextResponse } from "next/server";
 import {
+  getInstalledAoVersion,
   isVersionOutdated,
   loadGlobalConfig,
+  readUpdateCheckCacheRaw,
   type UpdateChannel,
 } from "@aoagents/ao-core";
 
 export const dynamic = "force-dynamic";
-
-interface CacheData {
-  latestVersion?: string;
-  checkedAt?: string;
-  currentVersionAtCheck?: string;
-  channel?: UpdateChannel;
-  /**
-   * Mirrors the CLI's CacheData. Only the literal "git" matters here — for git
-   * installs we read the cached `isOutdated` directly because `latestVersion`
-   * is a git ref like "origin/main" (not a semver), so `isVersionOutdated`
-   * would always return false.
-   */
-  installMethod?: string;
-  isOutdated?: boolean;
-}
 
 interface VersionResponse {
   current: string;
@@ -44,42 +27,6 @@ interface VersionResponse {
   channel: UpdateChannel;
   isOutdated: boolean;
   checkedAt: string | null;
-}
-
-function getCachePath(): string {
-  const xdg = process.env["XDG_CACHE_HOME"];
-  const base = xdg || join(homedir(), ".cache");
-  return join(base, "ao", "update-check.json");
-}
-
-function readCache(): CacheData | null {
-  const path = getCachePath();
-  if (!existsSync(path)) return null;
-  try {
-    const raw = readFileSync(path, "utf-8");
-    return JSON.parse(raw) as CacheData;
-  } catch {
-    return null;
-  }
-}
-
-function getCurrentVersion(): string {
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require("@aoagents/ao/package.json") as { version: string };
-    return pkg.version;
-  } catch {
-    // Fall back to the web package's own version. The dashboard ships in lockstep
-    // with `@aoagents/ao` (changeset linked group), so this is a safe proxy when
-    // the wrapper isn't in node_modules (dev mode).
-    try {
-      const require = createRequire(import.meta.url);
-      const pkg = require("@aoagents/ao-web/package.json") as { version: string };
-      return pkg.version;
-    } catch {
-      return "0.0.0";
-    }
-  }
 }
 
 function resolveChannel(): UpdateChannel {
@@ -92,9 +39,9 @@ function resolveChannel(): UpdateChannel {
 }
 
 export async function GET() {
-  const current = getCurrentVersion();
+  const current = getInstalledAoVersion();
   const channel = resolveChannel();
-  const cache = readCache();
+  const cache = readUpdateCheckCacheRaw();
 
   // Cache must match the active channel — otherwise we'd report a stale
   // @latest version to a user who recently switched to @nightly.

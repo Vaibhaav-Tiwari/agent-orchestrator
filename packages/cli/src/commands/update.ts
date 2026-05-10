@@ -17,7 +17,6 @@ import {
   getCurrentVersion,
   getUpdateCommand,
   invalidateCache,
-  isManualOnlyInstall,
   readCachedUpdateInfo,
   resolveUpdateChannel,
   type InstallMethod,
@@ -389,5 +388,3 @@ async function handleUnknownUpdate(): Promise<void> {
     ),
   );
 }
-
-export { isManualOnlyInstall };

@@ -10,12 +10,12 @@
 
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
+  getInstalledAoVersion,
+  getUpdateCheckCachePath,
   isVersionOutdated as coreIsVersionOutdated,
   loadGlobalConfig,
   type UpdateChannel,
@@ -209,14 +209,17 @@ export function detectInstallMethod(): InstallMethod {
 // Version
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve the currently-installed `@aoagents/ao` version.
+ *
+ * Delegates to core's `getInstalledAoVersion` (single source of truth shared
+ * with the dashboard) and falls back to the CLI's own embedded version when
+ * neither package is in `node_modules` (test/dev edge case).
+ */
 export function getCurrentVersion(): string {
-  try {
-    const require = createRequire(import.meta.url);
-    const aoPkg = require("@aoagents/ao/package.json") as { version: string };
-    return aoPkg.version;
-  } catch {
-    return getCliVersion();
-  }
+  const fromCore = getInstalledAoVersion();
+  if (fromCore !== "0.0.0") return fromCore;
+  return getCliVersion();
 }
 
 // ---------------------------------------------------------------------------
@@ -285,14 +288,15 @@ export function isManualOnlyInstall(method: InstallMethod): boolean {
 // Cache
 // ---------------------------------------------------------------------------
 
+/** Directory holding the update cache. Re-exported for ao doctor / CLI smoke tests. */
 export function getCacheDir(): string {
-  const xdg = process.env["XDG_CACHE_HOME"];
-  const base = xdg || join(homedir(), ".cache");
-  return join(base, "ao");
+  // dirname(getUpdateCheckCachePath()) keeps this in lock-step with core's
+  // canonical path resolver.
+  return dirname(getUpdateCheckCachePath());
 }
 
 function getCachePath(): string {
-  return join(getCacheDir(), "update-check.json");
+  return getUpdateCheckCachePath();
 }
 
 /**

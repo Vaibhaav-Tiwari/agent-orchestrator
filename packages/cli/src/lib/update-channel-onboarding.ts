@@ -11,7 +11,7 @@
 import { existsSync } from "node:fs";
 import chalk from "chalk";
 import {
-  getDefaultRuntime,
+  createDefaultGlobalConfig,
   getGlobalConfigPath,
   loadGlobalConfig,
   saveGlobalConfig,
@@ -54,37 +54,15 @@ export function hasChosenUpdateChannel(): boolean {
 
 /**
  * Persist the chosen channel to the global config.
- * Loads existing config (or creates a new one) and writes the field.
- *
- * Uses `getDefaultRuntime()` for the runtime default so a Windows user who
- * dismisses the channel prompt doesn't end up with `runtime: "tmux"` locked
- * in their config.
+ * Loads existing config (or creates a new one via `createDefaultGlobalConfig`)
+ * and writes the field.
  */
 export function persistUpdateChannel(channel: UpdateChannel): void {
   const path = getGlobalConfigPath();
   const existing = existsSync(path) ? loadGlobalConfig(path) : null;
   const next: GlobalConfig = existing
     ? { ...existing, updateChannel: channel }
-    : ({
-        port: 3000,
-        readyThresholdMs: 300_000,
-        defaults: {
-          runtime: getDefaultRuntime(),
-          agent: "claude-code",
-          workspace: "worktree",
-          notifiers: ["composio", "desktop"],
-        },
-        projects: {},
-        notifiers: {},
-        notificationRouting: {
-          urgent: ["desktop", "composio"],
-          action: ["desktop", "composio"],
-          warning: ["composio"],
-          info: ["composio"],
-        },
-        reactions: {},
-        updateChannel: channel,
-      } as GlobalConfig);
+    : { ...createDefaultGlobalConfig(), updateChannel: channel };
   saveGlobalConfig(next, path);
 }
 

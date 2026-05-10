@@ -35,28 +35,26 @@ export function UpdateBanner() {
     }
   }, []);
 
-  // Initial load. Deferred to a microtask so the synchronous render path is
-  // unaffected — the dashboard's existing tests use `mockImplementationOnce`
-  // against the global fetch and would consume that mock if we called fetch
-  // during the same effect tick. The cache TTL is 24 h so polling would be
-  // wasteful; the CLI startup notice covers other surfaces.
+  // Initial load runs once on mount.
+  //
+  // No interval / re-fetch: the cache TTL is 24 h, the CLI keeps the cache
+  // fresh in the background, and the dashboard re-mounts on navigation —
+  // a fresh `<Dashboard>` mount picks up any new version. Re-evaluate if we
+  // ever see "user kept tab open for days, missed an update."
   useEffect(() => {
     if (typeof fetch !== "function") return;
     let cancelled = false;
-    const handle = setTimeout(() => {
-      Promise.resolve(fetch("/api/version", { cache: "no-store" }))
-        .then((r) => (r && r.ok ? (r.json() as Promise<VersionResponse>) : null))
-        .then((data) => {
-          if (cancelled) return;
-          setInfo(data);
-        })
-        .catch(() => {
-          // Silent — banner stays hidden if we can't talk to the route.
-        });
-    }, 0);
+    Promise.resolve(fetch("/api/version", { cache: "no-store" }))
+      .then((r) => (r && r.ok ? (r.json() as Promise<VersionResponse>) : null))
+      .then((data) => {
+        if (cancelled) return;
+        setInfo(data);
+      })
+      .catch(() => {
+        // Silent — banner stays hidden if we can't talk to the route.
+      });
     return () => {
       cancelled = true;
-      clearTimeout(handle);
     };
   }, []);
 
