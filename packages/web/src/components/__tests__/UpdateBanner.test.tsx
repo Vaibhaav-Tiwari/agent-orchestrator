@@ -155,4 +155,34 @@ describe("UpdateBanner", () => {
 
     await screen.findByText(/3 sessions active/);
   });
+
+  it("dismiss button hides the banner even from the 'blocked' (409) error state", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockVersionResponse({
+          current: "0.5.0",
+          latest: "0.5.1",
+          channel: "stable",
+          isOutdated: true,
+        }),
+      )
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          ok: false,
+          message: "1 session active. Run `ao stop` first.",
+          activeSessions: 1,
+        }),
+      } as Response);
+
+    const { container } = render(<UpdateBanner />);
+    const update = await screen.findByRole("button", { name: "Update" });
+    fireEvent.click(update);
+    // Wait for the 409 to surface so we're definitely in the blocked phase.
+    await screen.findByText(/1 session active/);
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(container.firstChild).toBeNull());
+  });
 });

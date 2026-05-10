@@ -13,6 +13,7 @@
 
 import { spawn } from "node:child_process";
 import { NextResponse, type NextRequest } from "next/server";
+import { isWindows } from "@aoagents/ao-core";
 import { getServices } from "@/lib/services";
 
 export const dynamic = "force-dynamic";
@@ -64,16 +65,22 @@ export async function POST(_req: NextRequest) {
   // tears down the dashboard process. We rely on PATH resolution because the
   // user installed `ao` themselves — there's no canonical install location.
   //
-  // ENOENT (binary missing from PATH) fires asynchronously as an `error`
-  // event on the child, NOT as a sync throw — without an explicit handler
-  // it would propagate as an unhandled error and crash the test runner. So
-  // we attach a noop handler here; in production, the worst-case is the
-  // banner shows "Update started" but nothing actually installs, which the
-  // user will notice on next page load.
+  // `shell: isWindows()` is required so PATHEXT gets consulted on Windows —
+  // npm's `ao` shim is `ao.cmd`, and Node.js does not look at PATHEXT for
+  // non-shell spawns, so the bare `ao` lookup would silently ENOENT on every
+  // Windows install. `windowsHide: true` keeps the shell window from flashing.
+  //
+  // ENOENT still fires asynchronously as an `error` event on the child (POSIX
+  // case where `ao` isn't on PATH), NOT as a sync throw — without an explicit
+  // handler it would propagate as an unhandled error and crash the test
+  // runner. The handler is a noop in production; the user will see "no
+  // version change" on next page load if the install never ran.
   try {
     const child = spawn("ao", ["update"], {
       detached: true,
       stdio: "ignore",
+      shell: isWindows(),
+      windowsHide: true,
     });
     child.on("error", () => {
       // Swallow async spawn errors (ENOENT etc.) so they don't become

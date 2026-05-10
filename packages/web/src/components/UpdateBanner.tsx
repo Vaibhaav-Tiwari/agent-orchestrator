@@ -68,6 +68,12 @@ export function UpdateBanner() {
       // ignore
     }
     setDismissedFor(info.latest);
+    // Reset to idle so the hide condition (`dismissedFor === info.latest &&
+    // phase === "idle"`) fires even when the user dismisses while we're
+    // showing a 409 / error message. Without this the banner would stay
+    // pinned on screen until the user reloads.
+    setPhase("idle");
+    setErrorMessage(null);
   }, [info]);
 
   const handleUpdate = useCallback(async () => {
