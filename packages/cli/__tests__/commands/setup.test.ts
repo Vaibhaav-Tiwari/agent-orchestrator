@@ -745,6 +745,31 @@ projects:
     expect(parsed.notifiers?.["desktop"]).toMatchObject({ plugin: "desktop", backend: "ao-app" });
   });
 
+  it("reports denied notification permission without writing config", async () => {
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes("--request-permission")) {
+        const error = new Error("Command failed") as Error & { stdout: Buffer; stderr: Buffer };
+        error.stdout = Buffer.from('{"status":"denied","bundleId":"com.aoagents.notifier"}\n');
+        error.stderr = Buffer.alloc(0);
+        throw error;
+      }
+      return "";
+    });
+    const program = createProgram();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      program.parseAsync(["node", "test", "setup", "desktop", "--non-interactive"]),
+    ).rejects.toThrow("process.exit");
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("System Settings"));
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
   it("shows status without installing or writing config", async () => {
     const program = createProgram();
 

@@ -83,6 +83,29 @@ function execNotifierJson(appPath: string, args: string[]): JsonRecord | null {
   }
 }
 
+function parseJsonOutput(output: unknown): JsonRecord | null {
+  try {
+    const text = Buffer.isBuffer(output) ? output.toString("utf-8") : String(output ?? "");
+    if (!text.trim()) return null;
+    return JSON.parse(text) as JsonRecord;
+  } catch {
+    return null;
+  }
+}
+
+function formatExecError(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  return String(error);
+}
+
+function permissionDeniedMessage(): string {
+  return (
+    "macOS notification permission is denied for AO Notifier.app.\n" +
+    "  Open System Settings > Notifications > AO Notifier and enable Allow Notifications.\n" +
+    "  Then rerun: ao setup desktop --force"
+  );
+}
+
 function printStatus(): void {
   const os = currentPlatform();
   const appPath = getInstalledNotifierAppPath();
@@ -127,9 +150,32 @@ function copyBundledApp(): string {
 }
 
 function requestPermission(appPath: string): void {
-  execFileSync(getNotifierExecutablePath(appPath), ["--request-permission"], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  let result: JsonRecord | null = null;
+
+  try {
+    const output = execFileSync(getNotifierExecutablePath(appPath), ["--request-permission"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    result = parseJsonOutput(output);
+  } catch (error) {
+    const failure = error as { stdout?: unknown; stderr?: unknown };
+    result = parseJsonOutput(failure.stdout);
+    if (result?.["status"] === "denied") {
+      throw new DesktopSetupError(permissionDeniedMessage());
+    }
+
+    const stderr = Buffer.isBuffer(failure.stderr)
+      ? failure.stderr.toString("utf-8").trim()
+      : String(failure.stderr ?? "").trim();
+    throw new DesktopSetupError(
+      `Could not request macOS notification permission: ${stderr || formatExecError(error)}`,
+    );
+  }
+
+  if (result?.["status"] === "denied") {
+    throw new DesktopSetupError(permissionDeniedMessage());
+  }
 }
 
 function sendSetupNotification(appPath: string): void {
@@ -149,9 +195,19 @@ function sendSetupNotification(appPath: string): void {
     actions: [{ label: "Open Dashboard", url: "http://localhost:3000" }],
   };
   const encoded = Buffer.from(JSON.stringify(payload), "utf-8").toString("base64");
-  execFileSync(getNotifierExecutablePath(appPath), ["--notify-base64", encoded], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  try {
+    execFileSync(getNotifierExecutablePath(appPath), ["--notify-base64", encoded], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const failure = error as { stderr?: unknown };
+    const stderr = Buffer.isBuffer(failure.stderr)
+      ? failure.stderr.toString("utf-8").trim()
+      : String(failure.stderr ?? "").trim();
+    throw new DesktopSetupError(
+      `Could not send desktop setup test notification: ${stderr || formatExecError(error)}`,
+    );
+  }
 }
 
 function findOptionalConfigPath(): string | undefined {
