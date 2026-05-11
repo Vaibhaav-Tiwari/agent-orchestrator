@@ -31,18 +31,28 @@ Collect all available context about the bug:
 ## Step 1: Understand the Issue
 
 1. Read the bug report carefully. Ask clarifying questions if ambiguous.
-2. **Always trace the actual code path** — don't surface-level diagnose. The obvious answer isn't always the real answer. Example: [#1129](https://github.com/ComposioHQ/agent-orchestrator/issues/1129) looked like a simple `ao stop` issue but was actually a session lineage/cascade problem.
-3. Look at the **latest main** code to trace the root cause:
+2. **Collect environment info.** Every triage should capture:
+   ```
+   - OS: Windows 11 / macOS 15 / Ubuntu 24.04
+   - Shell: PowerShell 7.4 / bash 5.2 / zsh
+   - Runtime: runtime-process (Windows default) / runtime-tmux (macOS/Linux default)
+   - AO version: `ao --version` output
+   - Node version: `node --version` output
+   - Install method: npm global / pnpm / git clone
+   ```
+   If the reporter doesn't provide this, ask. Version mismatches between CLI and daemon have caused real bugs (e.g., [#1188](https://github.com/ComposioHQ/agent-orchestrator/issues/1188)). Install method matters because git installs have different update paths than npm. If you can't get all of it, collect what you can — partial info is better than none.
+3. **Always trace the actual code path** — don't surface-level diagnose. The obvious answer isn't always the real answer. Example: [#1129](https://github.com/ComposioHQ/agent-orchestrator/issues/1129) looked like a simple `ao stop` issue but was actually a session lineage/cascade problem.
+4. Look at the **latest main** code to trace the root cause:
    - Run `git fetch origin main && git log --oneline origin/main -5` to see current HEAD
    - Record the **commit hash** you're analyzing against
    - Use `grep`, `rg`, or file search to trace the code path
-4. **Git archaeology with `git log -S`:** When a CSS property, class name, or code pattern changed and broke something, use:
+5. **Git archaeology with `git log -S`:** When a CSS property, class name, or code pattern changed and broke something, use:
    ```bash
    git log --oneline -S 'exact-string' -- <file>
    git show <sha> -- <file> | grep -B 5 -A 10 'pattern'
    ```
    This finds which commits introduced or removed specific code. Example: [#1391](https://github.com/ComposioHQ/agent-orchestrator/issues/1391) traced a mobile layout break to a `display: flex` → `display: grid` change that silently broke `flex-direction: column` overrides.
-5. **Research upstream dependencies** when the bug involves a library (xterm, node-pty, React, etc.):
+6. **Research upstream dependencies** when the bug involves a library (xterm, node-pty, React, etc.):
    - Check installed vs latest version
    - Search the dependency's GitHub issues for the same symptom
    - Check changelogs for fixes between versions
@@ -77,14 +87,42 @@ AO runs on **Windows, macOS, and Linux** as first-class targets. Many bugs are O
 
 If the bug looks OS-specific, tag the issue with `to-reproduce` and include the reporter's system info.
 
-## Step 2: Search for Duplicate Issues
+### Step 1c: Stop-and-Ask Triggers
+
+Don't burn tool calls cycling through hypotheses. If any of these conditions are met, **stop and ask the reporter for more info** before continuing:
+
+- **3 failed hypotheses** — you've traced 3 different code paths and none explain the symptom. Stop.
+- **Can't reproduce** and no logs/screenshots available — ask for exact reproduction steps and system info.
+- **Root cause is in a dependency** (upstream bug confirmed) — stop, file with upstream reference, don't guess at a local fix.
+- **Bug only visible in UI** and you can't take a screenshot — ask the reporter to describe exactly what they see and when it happens.
+- **Reporter's environment unknown** — you haven't collected OS/shell/version info yet. Ask before tracing more code.
+
+When stopping, tell the reporter what you've tried and what you need. Example:
+> "I've traced through the lifecycle manager, session manager, and runtime code but can't pinpoint the root cause. Can you share: (1) your OS and shell, (2) exact steps to reproduce, (3) whether it's consistent or intermittent?"
+
+## Step 2: Search for Duplicate and Related Issues
+
+Search with multiple strategies — don't rely on a single keyword search:
 
 ```bash
-gh issue list --repo <upstream-repo> --state open --search "<keywords>"
+# 1. Search by symptom (what the user sees)
+gh issue list --repo <upstream-repo> --state all --search "blank terminal"
+gh issue list --repo <upstream-repo> --state all --search "double sidebar"
+
+# 2. Search by component (the file/module involved)
+gh issue list --repo <upstream-repo> --state all --search "ProjectSidebar"
+gh issue list --repo <upstream-repo> --state all --search "DirectTerminal"
+
+# 3. Search by error message (exact strings from logs/screenshots)
+gh issue list --repo <upstream-repo> --state all --search "session not found"
+
+# 4. Check PRs too — sometimes a fix PR exists without a filed issue
+gh pr list --repo <upstream-repo> --state all --search "<keywords>"
 ```
 
-- Search with multiple keyword combinations (broad first, then narrow)
-- If a match is found, go to Step 3. If not, go to Step 4.
+**Critical:** Always search **both open AND closed** issues (`--state all`). Bugs get closed as fixed and regress. Searching only open issues misses regressions of previously-fixed bugs. Also search PRs — sometimes fixes land without issues being filed.
+
+If a match is found, go to Step 3. If not, go to Step 4.
 
 ## Step 3: Duplicate Found — Comment on Existing Issue
 
@@ -119,7 +157,21 @@ EOF
 - Root cause analysis with file paths and line numbers
 - Live observability data if relevant
 
-### 4.1b Upload screenshots to GitHub
+### 4.1b Pre-Submission Checklist
+
+Before uploading screenshots and creating the issue, verify all of the following:
+
+- [ ] **Reporter attribution is correct** — from the original bug report, not the person who tagged you
+- [ ] **Commit hash recorded** — the exact hash you analyzed against
+- [ ] **AO version recorded** — `ao --version` from the reporter or environment
+- [ ] **Root cause confidence scored** — High / Medium / Low (see section below)
+- [ ] **Related issues cross-linked** — searched by symptom, component, and error message
+- [ ] **Reproduction steps are concrete** — not "it breaks" but specific steps a developer can follow
+- [ ] **Screenshots ready for upload** — downloaded locally, ready to push to GitHub
+
+If any of these are missing, go back and collect them before proceeding. Filing an incomplete issue wastes everyone's time.
+
+### 4.1c Upload screenshots to GitHub
 
 **⛔ NEVER use placeholder URLs.** Every image must be uploaded BEFORE the issue is created. Placeholder URLs (`placeholder-will-upload`, `TODO`, etc.) always result in broken links that need follow-up fixes. See [#1151](https://github.com/ComposioHQ/agent-orchestrator/issues/1151) for an RCA on this pattern.
 
@@ -220,7 +272,37 @@ If the label doesn't exist:
 gh label create "priority: medium" --repo <upstream-repo> --color "FBCA04" --description "Medium priority"
 ```
 
-### 4.4 Create a PR for the fix (always attempt this)
+### 4.4 Root Cause Confidence Score
+
+Rate your diagnosis before filing. This prevents other agents and developers from treating a guess like a confirmed diagnosis. Include this in the issue body as `**Confidence:** High/Medium/Low`.
+
+| Level | Meaning | Labels to add |
+|-------|---------|---------------|
+| **High** | Traced exact code path, can point to specific lines, can explain the failure mechanism | `bug` only |
+| **Medium** | Strong hypothesis consistent with the code, but unconfirmed (e.g., can't reproduce locally, or multiple plausible paths) | `bug`, `to-explore` |
+| **Low** | Can't trace root cause, or multiple conflicting theories | `bug`, `to-reproduce` |
+
+**Example:** The scroll regression in [PR #1608](https://github.com/ComposioHQ/agent-orchestrator/pull/1608) was initially diagnosed with high confidence as an xterm v6 issue. The real cause was a single `=` prefix on a tmux `set-option` call. Should have been `Medium` — the code tracing was consistent but unconfirmed via testing.
+
+### 4.5 Cross-Link Related Issues
+
+After creating the issue, search for **related** (not just duplicate) issues and include a `## Related` section in the issue body:
+
+```bash
+# Search by the subsystem/component involved
+gh issue list --repo <repo> --state all --search "<component-or-subsystem>"
+```
+
+Include in the issue body:
+```
+## Related
+- [#1020](url) — stale leftover session blocking ao start (same subsystem, different cause)
+- [#1035](url) — duplicate of this issue (same race condition)
+```
+
+Cross-links help maintainers see the full picture — which subsystems are fragile, which patterns repeat, whether a fix in one area might affect another.
+
+### 4.6 Create a PR for the fix (always attempt this)
 
 **Always try to push a fix PR alongside the issue.**
 
@@ -295,7 +377,7 @@ with open("/tmp/push.json", "w") as f:
 subprocess.run(["gh", "api", "-X", "PUT", f"repos/<repo>/contents/<path>", "--input", "/tmp/push.json"])
 ```
 
-### 4.5 Post confirmation back
+### 4.7 Post confirmation back
 
 Report back with:
 - Issue URL
@@ -343,6 +425,25 @@ gh api "repos/{owner}/{repo}/commits?path={path}&per_page=10" --jq '.[] | "\(.sh
 # Read a file at a specific commit
 gh api "repos/{owner}/{repo}/contents/{path}?ref={sha}" --jq '.content' | base64 -d
 ```
+
+## Subsystem-Specific Triage Quick Reference
+
+Different subsystems need different info and code tracing starting points. Use this to avoid wasting time in the wrong part of the codebase:
+
+| Subsystem | Always collect | Key files to trace |
+|-----------|---------------|-------------------|
+| **CLI** (`ao start/stop/spawn`) | Config YAML, install method, version, OS | `packages/cli/src/commands/` |
+| **Web UI / Dashboard** | Screenshot, browser, viewport size, OS | `packages/web/src/components/`, `globals.css` |
+| **Terminal (xterm/tmux)** | Runtime type (`runtime-process` vs `runtime-tmux`), tmux version, shell | `DirectTerminal.tsx`, `useXtermTerminal.ts`, `terminal-touch-scroll.ts` |
+| **Lifecycle / Status** | Lifecycle state transitions, session IDs | `core/src/lifecycle-manager.ts`, `core/src/lifecycle-state.ts` |
+| **Session management** | Session ID, spawn config, runtime handle | `core/src/session-manager.ts` |
+| **Plugins (agents)** | Plugin name (claude-code, codex, opencode), agent version | `packages/plugins/<agent>/` |
+| **Config / Project setup** | `agent-orchestrator.yaml` contents, project path | `packages/core/src/config.ts` |
+
+**Common misrouting patterns:**
+- Terminal bugs → check if it's a **tmux issue** (runtime-tmux) or **xterm rendering issue** (web) or **PTY issue** (runtime-process on Windows). Don't assume — trace where the bytes flow.
+- "Session stuck" bugs → check if it's a **lifecycle state machine** issue (lifecycle-manager) or **agent process** issue (plugin) or **runtime connection** issue (tmux/process). The lifecycle README documents the full state machine.
+- "Config not saving" bugs → check if it's a **config loading** issue (c12/config.ts) or **project registration** issue (running-state.ts) or **YAML write** issue (file permissions).
 
 ## Formatting Rules
 
