@@ -822,13 +822,19 @@ describe("update command", () => {
       expect(mockSpawn).not.toHaveBeenCalled();
     });
 
-    it("does NOT force a prompt when no previous cache exists (first ever update)", async () => {
+    it("does NOT force a channel-switch prompt when versions match (no prior cache, same channel build)", async () => {
+      // Prior behavior was "no previous cache → no prompt regardless of
+      // version mismatch", which silently dropped the first-opt-in install
+      // (Ashish P2). The first-opt-in branch is now covered by a dedicated
+      // describe block above; this test guards the OTHER case — no prior
+      // cache but versions actually match — which should still say
+      // "Already on latest" and not prompt.
       mockResolveUpdateChannel.mockReturnValue("nightly");
       mockReadCachedUpdateInfo.mockReturnValue(null);
       mockCheckForUpdate.mockResolvedValue(
         makeNpmUpdateInfo({
           installMethod: "npm-global",
-          currentVersion: "0.5.0",
+          currentVersion: "0.5.0-nightly-abc",
           latestVersion: "0.5.0-nightly-abc",
           isOutdated: false,
         }),
@@ -838,6 +844,148 @@ describe("update command", () => {
       await program.parseAsync(["node", "test", "update"]);
       const all = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
       expect(all).toMatch(/Already on latest nightly/);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // First-channel opt-in (Ashish P2 — `ao config set updateChannel nightly`
+  // followed by `ao update` with no prior auto-update cache)
+  // -----------------------------------------------------------------------
+
+  describe("first-channel opt-in", () => {
+    beforeEach(() => {
+      mockDetectInstallMethod.mockReturnValue("npm-global");
+      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+      Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+      // Active-session guard happy path.
+      mockExistsSync.mockReturnValue(true);
+      mockLoadGlobalConfig.mockReturnValue({
+        projects: { "my-app": { path: "/tmp/foo" } },
+      });
+      mockLoadConfig.mockImplementation((path?: string) => ({
+        projects: { "my-app": { path: "/tmp/foo" } },
+        configPath: path ?? "/cwd/agent-orchestrator.yaml",
+      }));
+    });
+
+    it("triggers install when stable user opts into nightly and there's no prior cache (Ashish proof)", async () => {
+      // Repro of Ashish P2: stable user on 0.5.0, runs `ao config set
+      // updateChannel nightly`, runs `ao update`. Previously got
+      // "Already on latest nightly" because semver says prerelease < stable.
+      // With the first-opt-in branch, we recognise the version mismatch and
+      // prompt; on confirm, install runs.
+      mockResolveUpdateChannel.mockReturnValue("nightly");
+      mockReadCachedUpdateInfo.mockReturnValue(null); // no prior cache
+      mockCheckForUpdate.mockResolvedValue(
+        makeNpmUpdateInfo({
+          installMethod: "npm-global",
+          currentVersion: "0.5.0",
+          latestVersion: "0.5.0-nightly-abc",
+          isOutdated: false,
+          recommendedCommand: "npm install -g @aoagents/ao@nightly",
+        }),
+      );
+      mockPromptConfirm.mockResolvedValue(true);
+      mockSpawn.mockReturnValue(createMockChild(0));
+
+      await program.parseAsync(["node", "test", "update"]);
+
+      // Prompt should be forced (default=false) because this is a first-time
+      // opt-in into a different channel, even with no prior cache.
+      expect(mockPromptConfirm).toHaveBeenCalledWith(
+        expect.stringMatching(/Switch to nightly/),
+        false,
+      );
+      expect(mockSpawn).toHaveBeenCalled();
+    });
+
+    it("still says 'already on latest' when versions actually match", async () => {
+      // Sanity check: don't false-positive for users who genuinely are up to date.
+      mockResolveUpdateChannel.mockReturnValue("nightly");
+      mockReadCachedUpdateInfo.mockReturnValue(null);
+      mockCheckForUpdate.mockResolvedValue(
+        makeNpmUpdateInfo({
+          installMethod: "npm-global",
+          currentVersion: "0.5.0-nightly-abc",
+          latestVersion: "0.5.0-nightly-abc",
+          isOutdated: false,
+        }),
+      );
+      const logSpy = vi.mocked(console.log);
+
+      await program.parseAsync(["node", "test", "update"]);
+
+      const all = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(all).toMatch(/Already on latest nightly/);
+      expect(mockPromptConfirm).not.toHaveBeenCalled();
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // API-invoked (non-interactive) install — Ashish P1 merge blocker
+  // -----------------------------------------------------------------------
+
+  describe("API-invoked install (AO_NON_INTERACTIVE_INSTALL=1)", () => {
+    let origNonInteractive: string | undefined;
+    beforeEach(() => {
+      mockDetectInstallMethod.mockReturnValue("npm-global");
+      mockResolveUpdateChannel.mockReturnValue("stable");
+      mockCheckForUpdate.mockResolvedValue(
+        makeNpmUpdateInfo({ installMethod: "npm-global" }),
+      );
+      mockExistsSync.mockReturnValue(true);
+      mockLoadGlobalConfig.mockReturnValue({
+        projects: { "my-app": { path: "/tmp/foo" } },
+      });
+      mockLoadConfig.mockImplementation((path?: string) => ({
+        projects: { "my-app": { path: "/tmp/foo" } },
+        configPath: path ?? "/cwd/agent-orchestrator.yaml",
+      }));
+      // stdio: "ignore" makes isTTY() return false, simulating the spawn
+      // context POST /api/update creates.
+      Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+      Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
+      origNonInteractive = process.env["AO_NON_INTERACTIVE_INSTALL"];
+      process.env["AO_NON_INTERACTIVE_INSTALL"] = "1";
+      mockSpawn.mockReturnValue(createMockChild(0));
+    });
+
+    afterEach(() => {
+      if (origNonInteractive === undefined) {
+        delete process.env["AO_NON_INTERACTIVE_INSTALL"];
+      } else {
+        process.env["AO_NON_INTERACTIVE_INSTALL"] = origNonInteractive;
+      }
+    });
+
+    it("actually invokes runNpmInstall when AO_NON_INTERACTIVE_INSTALL=1 even though isTTY is false", async () => {
+      // The P1 bug: before this fix, the !isTTY() branch printed "Run: ..."
+      // and returned. The dashboard's banner click would 202 but no install
+      // would run. Asserting spawn was called proves the install actually
+      // happens in the API-invoked path.
+      await program.parseAsync(["node", "test", "update"]);
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      // And without a TTY, we MUST NOT have prompted — that would hang the
+      // detached child forever.
+      expect(mockPromptConfirm).not.toHaveBeenCalled();
+    });
+
+    it("preserves the old 'print Run:' behavior for non-API non-TTY (piped output)", async () => {
+      delete process.env["AO_NON_INTERACTIVE_INSTALL"];
+      const logSpy = vi.mocked(console.log);
+      await program.parseAsync(["node", "test", "update"]);
+      const all = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(all).toMatch(/Run: npm install -g @aoagents\/ao@latest/);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it("still refuses on active sessions even when API-invoked (the API's own guard isn't a single point of trust)", async () => {
+      mockSessions.value = [{ id: "feat-1", status: "working" }];
+      await expect(
+        program.parseAsync(["node", "test", "update"]),
+      ).rejects.toThrow("process.exit(1)");
       expect(mockSpawn).not.toHaveBeenCalled();
     });
   });

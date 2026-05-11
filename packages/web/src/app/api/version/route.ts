@@ -44,8 +44,12 @@ export async function GET() {
   const cache = readUpdateCheckCacheRaw();
 
   // Cache must match the active channel — otherwise we'd report a stale
-  // @latest version to a user who recently switched to @nightly.
-  const cacheMatchesChannel = !cache?.channel || cache.channel === channel;
+  // @latest version to a user who recently switched to @nightly. Legacy
+  // entries (no `channel` field, written before channel scoping landed) are
+  // treated as misses, matching the CLI's `readCachedUpdateInfo` behavior.
+  // Without this the dashboard would happily serve a stale 0.6.0 latestVersion
+  // to a user who just switched to nightly until the 24h TTL expires.
+  const cacheMatchesChannel = cache?.channel === channel;
   const latest = cache?.latestVersion && cacheMatchesChannel ? cache.latestVersion : null;
 
   // Git installs cache `latestVersion: "origin/main"` (a ref, not a semver),

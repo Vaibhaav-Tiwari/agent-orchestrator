@@ -146,6 +146,31 @@ describe("GET /api/version", () => {
     const body = (await res.json()) as { isOutdated: boolean };
     expect(body.isOutdated).toBe(false);
   });
+
+  it("ignores legacy cache entries without a `channel` field (matches CLI behavior)", async () => {
+    // Pre-channel-scoping cache entry. Even though latestVersion looks newer
+    // than current, we can't know which channel it was written for, so we
+    // must reject it — otherwise a stable→nightly switch keeps serving the
+    // old stable latestVersion via the dashboard until the 24h TTL expires.
+    mockGlobalConfig.value = { updateChannel: "nightly" };
+    writeCache({
+      latestVersion: "99.0.0",
+      checkedAt: new Date().toISOString(),
+      currentVersionAtCheck: "0.6.0",
+      installMethod: "npm-global",
+      // No `channel` field — legacy.
+    });
+
+    const res = await versionGET();
+    const body = (await res.json()) as {
+      latest: string | null;
+      isOutdated: boolean;
+      checkedAt: string | null;
+    };
+    expect(body.latest).toBeNull();
+    expect(body.isOutdated).toBe(false);
+    expect(body.checkedAt).toBeNull();
+  });
 });
 
 describe("POST /api/update", () => {

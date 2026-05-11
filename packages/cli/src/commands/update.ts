@@ -30,6 +30,23 @@ function isTTY(): boolean {
 }
 
 /**
+ * The dashboard's POST /api/update spawns `ao update` with `stdio: "ignore"`,
+ * which makes `isTTY()` return false. That used to be fatal: handleNpmUpdate
+ * fell into the "non-interactive — print and return" branch and never invoked
+ * the install. The route would respond 202 "started" and absolutely nothing
+ * would happen.
+ *
+ * /api/update sets `AO_NON_INTERACTIVE_INSTALL=1` on the spawn env so we can
+ * distinguish "API kicked this off, please install without prompting" from
+ * "user piped output and we shouldn't surprise-install."
+ */
+export const NON_INTERACTIVE_INSTALL_ENV = "AO_NON_INTERACTIVE_INSTALL";
+
+function isApiInvoked(): boolean {
+  return process.env[NON_INTERACTIVE_INSTALL_ENV] === "1";
+}
+
+/**
  * Statuses that mean "the agent is doing real work right now and updating
  * `ao` would yank the rug out from under it."
  *
@@ -250,7 +267,20 @@ async function handleNpmUpdate(method: InstallMethod): Promise<void> {
     previousChannel !== undefined &&
     previousChannel !== channel;
 
-  if (!info.isOutdated && !isChannelSwitch) {
+  // First-channel opt-in. previousChannel === undefined means we've never
+  // installed via the auto-updater. A user who just ran `ao config set
+  // updateChannel nightly` (after a manual install) would otherwise see
+  // "Already on latest nightly" because semver says prerelease < stable.
+  // Treat any version mismatch as install-worthy in that case.
+  const isFirstChannelOptIn =
+    !info.isOutdated &&
+    !isChannelSwitch &&
+    previousChannel === undefined &&
+    info.currentVersion !== info.latestVersion;
+
+  const needsInstall = info.isOutdated || isChannelSwitch || isFirstChannelOptIn;
+
+  if (!needsInstall) {
     console.log(
       chalk.green(
         `Already on latest ${channel === "nightly" ? "nightly" : "version"} (${info.currentVersion}).`,
@@ -273,32 +303,54 @@ async function handleNpmUpdate(method: InstallMethod): Promise<void> {
         "  The version compare says you're current, but the install command picks a different dist-tag.",
       ),
     );
+  } else if (isFirstChannelOptIn) {
+    console.log(
+      chalk.yellow(
+        `\nFirst install via the ${channel} channel — installing the channel's current build.`,
+      ),
+    );
   }
   console.log();
 
   const command = getUpdateCommand(method, channel);
+  const apiInvoked = isApiInvoked();
+  const interactive = isTTY() && !apiInvoked;
 
-  if (!isTTY()) {
-    console.log(`Run: ${chalk.cyan(command)}`);
-    return;
-  }
-
+  // Non-interactive path: API-invoked OR piped output. We still gate on the
+  // active-session guard (refusing returns true/false), but we never bail
+  // out just because there's no terminal — the dashboard's "Update" click
+  // must actually install. The only thing we skip is the confirm prompt.
   if (!(await ensureNoActiveSessions())) {
     process.exit(1);
   }
 
-  // Soft auto-install: when the user has opted into stable or nightly we
-  // skip the confirm prompt — they've already said "keep me on this channel."
-  // Manual users (and explicit channel switches) still see the confirm so an
-  // unintended `ao update` doesn't wipe the version they pinned to.
-  if (channel === "manual" || isChannelSwitch) {
-    const promptText = isChannelSwitch
-      ? `Switch to ${channel} via ${chalk.cyan(command)}?`
-      : `Run ${chalk.cyan(command)}?`;
-    const confirmed = await promptConfirm(promptText, !isChannelSwitch);
-    if (!confirmed) return;
+  if (interactive) {
+    // Soft auto-install: when the user has opted into stable or nightly we
+    // skip the confirm prompt — they've already said "keep me on this channel."
+    // Manual users (and explicit channel switches / first opt-ins) still see
+    // the confirm so an unintended `ao update` doesn't wipe the version they
+    // pinned to.
+    if (channel === "manual" || isChannelSwitch || isFirstChannelOptIn) {
+      const promptText =
+        isChannelSwitch || isFirstChannelOptIn
+          ? `Switch to ${channel} via ${chalk.cyan(command)}?`
+          : `Run ${chalk.cyan(command)}?`;
+      const confirmed = await promptConfirm(
+        promptText,
+        !(isChannelSwitch || isFirstChannelOptIn),
+      );
+      if (!confirmed) return;
+    } else {
+      console.log(chalk.dim(`Updating: ${command}`));
+    }
+  } else if (apiInvoked) {
+    console.log(chalk.dim(`Updating (api-invoked): ${command}`));
   } else {
-    console.log(chalk.dim(`Updating: ${command}`));
+    // Non-TTY but also not API-invoked (piped output). Keep the old
+    // "print the command and let the user run it" behavior so a script
+    // running `ao update | tee` doesn't get a surprise install.
+    console.log(`Run: ${chalk.cyan(command)}`);
+    return;
   }
 
   const exitCode = await runNpmInstall(command);
