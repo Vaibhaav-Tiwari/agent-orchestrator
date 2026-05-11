@@ -12,11 +12,24 @@ const { mockFindConfigFile } = vi.hoisted(() => ({
   mockFindConfigFile: vi.fn(),
 }));
 
-const { mockReadFileSync, mockWriteFileSync, mockExistsSync, mockMkdirSync } = vi.hoisted(() => ({
+const {
+  mockReadFileSync,
+  mockWriteFileSync,
+  mockExistsSync,
+  mockMkdirSync,
+  mockCpSync,
+  mockRmSync,
+} = vi.hoisted(() => ({
   mockReadFileSync: vi.fn(),
   mockWriteFileSync: vi.fn(),
   mockExistsSync: vi.fn(),
   mockMkdirSync: vi.fn(),
+  mockCpSync: vi.fn(),
+  mockRmSync: vi.fn(),
+}));
+
+const { mockExecFileSync } = vi.hoisted(() => ({
+  mockExecFileSync: vi.fn(),
 }));
 
 const { mockProbeGateway, mockValidateToken, mockDetectOpenClawInstallation } = vi.hoisted(() => ({
@@ -41,6 +54,16 @@ vi.mock("node:fs", async (importOriginal) => {
     writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
     existsSync: (...args: unknown[]) => mockExistsSync(...args),
     mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
+    cpSync: (...args: unknown[]) => mockCpSync(...args),
+    rmSync: (...args: unknown[]) => mockRmSync(...args),
+  };
+});
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
   };
 });
 
@@ -577,5 +600,186 @@ projects:
       // nonInteractiveSetup auto-generates a token when none is provided
       expect(mockWriteFileSync).toHaveBeenCalled();
     });
+  });
+});
+
+describe("setup desktop command", () => {
+  const originalEnv = { ...process.env };
+  const sourceApp = "/tmp/source/AO Notifier.app";
+  const targetApp = "/tmp/home/Applications/AO Notifier.app";
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    process.env = { ...originalEnv };
+    process.env["AO_DESKTOP_SETUP_PLATFORM"] = "darwin";
+    process.env["AO_NOTIFIER_MACOS_APP_PATH"] = sourceApp;
+    process.env["AO_DESKTOP_APP_INSTALL_PATH"] = targetApp;
+    mockFindConfigFile.mockReturnValue("/tmp/agent-orchestrator.yaml");
+    mockReadFileSync.mockReturnValue(MINIMAL_CONFIG);
+    mockWriteFileSync.mockImplementation(() => {});
+    mockMkdirSync.mockImplementation(() => undefined);
+    mockCpSync.mockImplementation(() => undefined);
+    mockRmSync.mockImplementation(() => undefined);
+    mockExistsSync.mockImplementation((path: string) =>
+      path.endsWith("AO Notifier.app/Contents/MacOS/ao-notifier"),
+    );
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes("--permission-status-json")) {
+        return '{"status":"authorized","bundleId":"com.aoagents.notifier"}';
+      }
+      if (args.includes("--version-json")) {
+        return '{"name":"AO Notifier","version":"0.6.0","bundleId":"com.aoagents.notifier"}';
+      }
+      if (args.includes("--request-permission")) {
+        return '{"status":"authorized","bundleId":"com.aoagents.notifier"}';
+      }
+      return "";
+    });
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it("registers the desktop setup command", () => {
+    const program = createProgram();
+    const setup = program.commands.find((command) => command.name() === "setup");
+    expect(setup?.commands.some((command) => command.name() === "desktop")).toBe(true);
+  });
+
+  it("installs the bundled app and wires desktop routing to all priorities", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(["node", "test", "setup", "desktop", "--non-interactive"]);
+
+    expect(mockCpSync).toHaveBeenCalledWith(sourceApp, targetApp, { recursive: true });
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    const parsed = parseYaml(writtenYaml) as {
+      notifiers?: Record<string, { plugin?: string; backend?: string; dashboardUrl?: string }>;
+      notificationRouting?: Record<string, string[]>;
+    };
+
+    expect(parsed.notifiers?.["desktop"]).toMatchObject({
+      plugin: "desktop",
+      backend: "ao-app",
+      dashboardUrl: "http://localhost:3000",
+    });
+    expect(parsed.notificationRouting?.["urgent"]).toContain("desktop");
+    expect(parsed.notificationRouting?.["action"]).toContain("desktop");
+    expect(parsed.notificationRouting?.["warning"]).toContain("desktop");
+    expect(parsed.notificationRouting?.["info"]).toContain("desktop");
+  });
+
+  it("preserves existing routing entries while adding desktop", async () => {
+    mockReadFileSync.mockReturnValue(`
+port: 3001
+defaults:
+  notifiers:
+    - slack
+notifiers:
+  slack:
+    plugin: slack
+notificationRouting:
+  urgent:
+    - slack
+projects:
+  my-app:
+    name: my-app
+`);
+    const program = createProgram();
+
+    await program.parseAsync(["node", "test", "setup", "desktop", "--non-interactive"]);
+
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    const parsed = parseYaml(writtenYaml) as {
+      notificationRouting?: Record<string, string[]>;
+      defaults?: { notifiers?: string[] };
+    };
+    expect(parsed.notificationRouting?.["urgent"]).toEqual(["slack", "desktop"]);
+    expect(parsed.notificationRouting?.["action"]).toEqual(["slack", "desktop"]);
+    expect(parsed.defaults?.notifiers).toEqual(["slack"]);
+  });
+
+  it("fails on conflicting desktop notifier config in non-interactive mode", async () => {
+    mockReadFileSync.mockReturnValue(`
+port: 3000
+notifiers:
+  desktop:
+    plugin: webhook
+projects:
+  my-app:
+    name: my-app
+`);
+    const program = createProgram();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit");
+    });
+
+    await expect(
+      program.parseAsync(["node", "test", "setup", "desktop", "--non-interactive"]),
+    ).rejects.toThrow("process.exit");
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("allows replacing conflicting desktop notifier config with --force", async () => {
+    mockReadFileSync.mockReturnValue(`
+port: 3000
+notifiers:
+  desktop:
+    plugin: webhook
+    url: http://example.com
+projects:
+  my-app:
+    name: my-app
+`);
+    const program = createProgram();
+
+    await program.parseAsync(["node", "test", "setup", "desktop", "--force", "--non-interactive"]);
+
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    const parsed = parseYaml(writtenYaml) as {
+      notifiers?: Record<string, { plugin?: string; backend?: string }>;
+    };
+    expect(parsed.notifiers?.["desktop"]).toMatchObject({ plugin: "desktop", backend: "ao-app" });
+  });
+
+  it("shows status without installing or writing config", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(["node", "test", "setup", "desktop", "--status"]);
+
+    expect(mockCpSync).not.toHaveBeenCalled();
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("ao-notifier"),
+      ["--version-json"],
+      expect.any(Object),
+    );
+  });
+
+  it("uninstalls the app without changing config", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(["node", "test", "setup", "desktop", "--uninstall"]);
+
+    expect(mockRmSync).toHaveBeenCalledWith(targetApp, { recursive: true, force: true });
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it("exits on non-macOS install attempts", async () => {
+    process.env["AO_DESKTOP_SETUP_PLATFORM"] = "linux";
+    const program = createProgram();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit");
+    });
+
+    await expect(
+      program.parseAsync(["node", "test", "setup", "desktop", "--non-interactive"]),
+    ).rejects.toThrow("process.exit");
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(mockCpSync).not.toHaveBeenCalled();
   });
 });

@@ -7,17 +7,25 @@ vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
 }));
 
+// Mock node:fs
+vi.mock("node:fs", () => ({
+  existsSync: vi.fn(() => false),
+}));
+
 // Mock node:os
 vi.mock("node:os", () => ({
+  homedir: vi.fn(() => "/Users/test"),
   platform: vi.fn(() => "darwin"),
 }));
 
 import { execFile, execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { platform } from "node:os";
 import { manifest, create, escapeAppleScript } from "./index.js";
 
 const mockExecFile = execFile as unknown as Mock;
 const mockExecFileSync = execFileSync as unknown as Mock;
+const mockExistsSync = existsSync as unknown as Mock;
 const mockPlatform = platform as unknown as Mock;
 
 function makeEvent(overrides: Partial<OrchestratorEvent> = {}): OrchestratorEvent {
@@ -38,6 +46,7 @@ describe("notifier-desktop", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPlatform.mockReturnValue("darwin");
+    mockExistsSync.mockReturnValue(false);
     // Default: terminal-notifier not available (osascript fallback)
     mockExecFileSync.mockImplementation(() => {
       throw new Error("not found");
@@ -366,6 +375,66 @@ describe("notifier-desktop", () => {
       expect(mockExecFile.mock.calls[0][0]).toBe("terminal-notifier");
       const args = mockExecFile.mock.calls[0][1] as string[];
       expect(args).toContain("-open");
+    });
+  });
+
+  describe("AO Notifier.app backend", () => {
+    beforeEach(() => {
+      mockExistsSync.mockImplementation((path: string) =>
+        path.endsWith("AO Notifier.app/Contents/MacOS/ao-notifier"),
+      );
+    });
+
+    it("uses AO Notifier.app before terminal-notifier in auto mode", async () => {
+      mockExecFileSync.mockReturnValue(Buffer.from("/usr/local/bin/terminal-notifier\n"));
+      const notifier = create({ dashboardUrl: "http://localhost:3000" });
+      await notifier.notify(makeEvent({ message: "native app" }));
+
+      expect(mockExecFile.mock.calls[0][0]).toBe(
+        "/Users/test/Applications/AO Notifier.app/Contents/MacOS/ao-notifier",
+      );
+      expect(mockExecFile.mock.calls[0][1][0]).toBe("--notify-base64");
+    });
+
+    it("passes event metadata and default open URL to AO Notifier.app", async () => {
+      const notifier = create({ backend: "ao-app", dashboardUrl: "http://localhost:3001" });
+      await notifier.notify(makeEvent({ id: "evt-native", sessionId: "s-9" }));
+
+      const encoded = mockExecFile.mock.calls[0][1][1] as string;
+      const payload = JSON.parse(Buffer.from(encoded, "base64").toString("utf-8")) as {
+        defaultOpenUrl: string;
+        event: { id: string; sessionId: string };
+      };
+      expect(payload.defaultOpenUrl).toBe("http://localhost:3001");
+      expect(payload.event).toMatchObject({ id: "evt-native", sessionId: "s-9" });
+    });
+
+    it("passes URL actions to AO Notifier.app", async () => {
+      const notifier = create({ backend: "ao-app" });
+      const actions: NotifyAction[] = [
+        { label: "Open PR", url: "https://github.com/example/pr/1" },
+        { label: "Kill", callbackEndpoint: "/api/kill" },
+      ];
+      await notifier.notifyWithActions!(makeEvent(), actions);
+
+      const encoded = mockExecFile.mock.calls[0][1][1] as string;
+      const payload = JSON.parse(Buffer.from(encoded, "base64").toString("utf-8")) as {
+        body: string;
+        actions: Array<{ label: string; url: string }>;
+      };
+      expect(payload.actions).toEqual([
+        { label: "Open PR", url: "https://github.com/example/pr/1" },
+      ]);
+      expect(payload.body).toContain("Kill");
+      expect(payload.body).not.toContain("Open PR");
+    });
+
+    it("fails when backend ao-app is configured but the app is missing", async () => {
+      mockExistsSync.mockReturnValue(false);
+      const notifier = create({ backend: "ao-app" });
+
+      await expect(notifier.notify(makeEvent())).rejects.toThrow("ao setup desktop");
+      expect(mockExecFile).not.toHaveBeenCalled();
     });
   });
 });

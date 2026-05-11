@@ -110,6 +110,8 @@ projects:
 notifiers:
   desktop:
     plugin: desktop
+    # Run 'ao setup desktop' on macOS to use AO Notifier.app
+    # backend: ao-app
   slack:
     plugin: slack
     # Requires SLACK_WEBHOOK_URL env var

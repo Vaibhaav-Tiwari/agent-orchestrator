@@ -22,6 +22,11 @@ import {
   DEFAULT_OPENCLAW_URL,
   HOOKS_PATH,
 } from "../lib/openclaw-probe.js";
+import {
+  DesktopSetupError,
+  runDesktopSetupAction,
+  type DesktopSetupOptions,
+} from "../lib/desktop-setup.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -494,6 +499,25 @@ AO config was written successfully. Add this to your OpenClaw config (${chalk.di
 
 export function registerSetup(program: Command): void {
   const setup = program.command("setup").description("Set up integrations with external services");
+
+  setup
+    .command("desktop")
+    .description("Install and configure the native macOS desktop notifier")
+    .option("--non-interactive", "Skip prompts and fail on config conflicts unless --force is set")
+    .option("--force", "Repair the app install and replace conflicting desktop notifier config")
+    .option("--status", "Show the native desktop notifier install and permission status")
+    .option("--uninstall", "Remove AO Notifier.app without changing AO config")
+    .action(async (opts: DesktopSetupOptions) => {
+      try {
+        await runDesktopSetupAction(opts);
+      } catch (err) {
+        if (err instanceof DesktopSetupError) {
+          console.error(err.message);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
+    });
 
   setup
     .command("openclaw")
