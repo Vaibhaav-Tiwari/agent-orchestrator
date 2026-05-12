@@ -86,7 +86,7 @@ Without this secret, both `release.yml` and `canary.yml` will fail at the publis
 npm install -g @aoagents/ao@nightly
 ```
 
-The nightly cron publishes from `main` daily at 23:00 IST (Fri–Tue). The bake window (Wed–Thu) pauses scheduled nightlies; release captains can re-cut a nightly via `workflow_dispatch` if a fix lands during bake.
+The nightly cron publishes from `main` daily at 23:30 IST (Fri–Tue). The bake window (Wed–Thu) pauses scheduled nightlies; release captains can re-cut a nightly via `workflow_dispatch` if a fix lands during bake.
 
 ---
 

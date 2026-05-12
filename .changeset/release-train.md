@@ -10,7 +10,7 @@ feat(release): weekly release train — channels, onboarding, dashboard banner, 
 Ships the full release pipeline described in `release-process.html`:
 
 - **Cron-driven nightly canary.** `.github/workflows/canary.yml` triggers via
-  `schedule: '30 17 * * 5,6,0,1,2'` (23:00 IST Fri–Tue) plus `workflow_dispatch`.
+  `schedule: '0 18 * * 5,6,0,1,2'` (23:30 IST Fri–Tue) plus `workflow_dispatch`.
   Bake window (Wed–Thu) pauses scheduled nightlies; the captain re-cuts via
   workflow_dispatch when a fix lands. Stable `release.yml` publishes via
   `changesets/action`. `.changeset/config.json` adds the snapshot template
