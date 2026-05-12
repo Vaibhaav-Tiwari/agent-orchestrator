@@ -9,14 +9,15 @@ import type { NotifyAction } from "@aoagents/ao-core";
 import composioPlugin from "@aoagents/ao-plugin-notifier-composio";
 import { makeEvent } from "./helpers/event-factory.js";
 
-const mockExecuteAction = vi.fn().mockResolvedValue({ successful: true });
-const mockClient = { executeAction: mockExecuteAction };
+const mockToolsExecute = vi.fn().mockResolvedValue({ successful: true });
+const mockClient = { tools: { execute: mockToolsExecute } };
 
 describe("notifier-composio integration", () => {
   const originalEnv = process.env.COMPOSIO_API_KEY;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockToolsExecute.mockResolvedValue({ successful: true });
     delete process.env.COMPOSIO_API_KEY;
   });
 
@@ -38,37 +39,58 @@ describe("notifier-composio integration", () => {
       });
       await notifier.notify(makeEvent());
 
-      expect(mockExecuteAction).toHaveBeenCalledWith(
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "SLACK_SEND_MESSAGE",
         expect.objectContaining({
-          action: "SLACK_SEND_MESSAGE",
-          params: expect.objectContaining({
+          arguments: expect.objectContaining({
             channel: "deploys",
           }),
-          appName: "slack",
         }),
       );
     });
 
-    it("discord app routes to DISCORD_SEND_MESSAGE with channel_id", async () => {
+    it("discord app routes to DISCORDBOT_CREATE_MESSAGE with channel_id", async () => {
       const notifier = composioPlugin.create({
         composioApiKey: "key",
         defaultApp: "discord",
+        mode: "bot",
         channelId: "1234567890",
         _clientOverride: mockClient,
       });
       await notifier.notify(makeEvent());
 
-      expect(mockExecuteAction).toHaveBeenCalledWith(
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "DISCORDBOT_CREATE_MESSAGE",
         expect.objectContaining({
-          action: "DISCORD_SEND_MESSAGE",
-          params: expect.objectContaining({
+          arguments: expect.objectContaining({
             channel_id: "1234567890",
           }),
         }),
       );
     });
 
-    it("gmail app routes to GMAIL_SEND_EMAIL with to/subject/body", async () => {
+    it("discord webhook mode routes to DISCORDBOT_EXECUTE_WEBHOOK", async () => {
+      const notifier = composioPlugin.create({
+        composioApiKey: "key",
+        defaultApp: "discord",
+        mode: "webhook",
+        webhookUrl: "https://discord.com/api/webhooks/1234567890/webhook-token",
+        _clientOverride: mockClient,
+      });
+      await notifier.notify(makeEvent());
+
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "DISCORDBOT_EXECUTE_WEBHOOK",
+        expect.objectContaining({
+          arguments: expect.objectContaining({
+            webhook_id: "1234567890",
+            webhook_token: "webhook-token",
+          }),
+        }),
+      );
+    });
+
+    it("gmail app routes to GMAIL_SEND_EMAIL with recipient/subject/body", async () => {
       const notifier = composioPlugin.create({
         composioApiKey: "key",
         defaultApp: "gmail",
@@ -77,11 +99,12 @@ describe("notifier-composio integration", () => {
       });
       await notifier.notify(makeEvent());
 
-      expect(mockExecuteAction).toHaveBeenCalledWith(
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "GMAIL_SEND_EMAIL",
         expect.objectContaining({
-          action: "GMAIL_SEND_EMAIL",
-          params: expect.objectContaining({
-            to: "admin@example.com",
+          version: "20260506_01",
+          arguments: expect.objectContaining({
+            recipient_email: "admin@example.com",
             subject: "Agent Orchestrator Notification",
           }),
         }),
@@ -99,8 +122,8 @@ describe("notifier-composio integration", () => {
         makeEvent({ priority: "urgent", type: "ci.failing", sessionId: "app-5" }),
       );
 
-      const text = mockExecuteAction.mock.calls[0][0].params.markdown_text as string;
-      expect(text).toContain("\u{1F6A8}"); // urgent emoji
+      const text = mockToolsExecute.mock.calls[0][1].arguments.markdown_text as string;
+      expect(text).toContain("\u{1F6A8}");
       expect(text).toContain("ci.failing");
       expect(text).toContain("app-5");
     });
@@ -112,7 +135,7 @@ describe("notifier-composio integration", () => {
       });
       await notifier.notify(makeEvent({ data: { prUrl: "https://github.com/org/repo/pull/99" } }));
 
-      const text = mockExecuteAction.mock.calls[0][0].params.markdown_text as string;
+      const text = mockToolsExecute.mock.calls[0][1].arguments.markdown_text as string;
       expect(text).toContain("https://github.com/org/repo/pull/99");
     });
 
@@ -123,7 +146,7 @@ describe("notifier-composio integration", () => {
       });
       await notifier.notify(makeEvent({ data: { prUrl: 123 } }));
 
-      const text = mockExecuteAction.mock.calls[0][0].params.markdown_text as string;
+      const text = mockToolsExecute.mock.calls[0][1].arguments.markdown_text as string;
       expect(text).not.toContain("PR:");
     });
   });
@@ -140,7 +163,7 @@ describe("notifier-composio integration", () => {
       ];
       await notifier.notifyWithActions!(makeEvent(), actions);
 
-      const text = mockExecuteAction.mock.calls[0][0].params.markdown_text as string;
+      const text = mockToolsExecute.mock.calls[0][1].arguments.markdown_text as string;
       expect(text).toContain("Merge PR: https://github.com/merge");
       expect(text).toContain("- Kill Session");
     });
@@ -155,7 +178,7 @@ describe("notifier-composio integration", () => {
       });
       await notifier.post!("All sessions complete", { channel: "#override" });
 
-      const args = mockExecuteAction.mock.calls[0][0].params;
+      const args = mockToolsExecute.mock.calls[0][1].arguments;
       expect(args.markdown_text).toBe("All sessions complete");
       expect(args.channel).toBe("override");
     });
@@ -173,10 +196,12 @@ describe("notifier-composio integration", () => {
   describe("error handling", () => {
     it("unsuccessful result throws descriptive error", async () => {
       const failClient = {
-        executeAction: vi.fn().mockResolvedValue({
-          successful: false,
-          error: "Channel not found",
-        }),
+        tools: {
+          execute: vi.fn().mockResolvedValue({
+            successful: false,
+            error: "Channel not found",
+          }),
+        },
       };
 
       const notifier = composioPlugin.create({

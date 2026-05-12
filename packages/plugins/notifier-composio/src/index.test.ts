@@ -2,6 +2,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { OrchestratorEvent, NotifyAction } from "@aoagents/ao-core";
 import { manifest, create } from "./index.js";
 
+const { mockToolsExecute, mockConstructorOptions } = vi.hoisted(() => ({
+  mockToolsExecute: vi.fn().mockResolvedValue({ successful: true }),
+  mockConstructorOptions: [] as Array<Record<string, unknown>>,
+}));
+
+vi.mock("@composio/core", () => {
+  function MockComposio(opts: Record<string, unknown>) {
+    mockConstructorOptions.push(opts);
+    return { tools: { execute: mockToolsExecute } };
+  }
+  return { Composio: MockComposio };
+});
+
 function makeEvent(overrides: Partial<OrchestratorEvent> = {}): OrchestratorEvent {
   return {
     id: "evt-1",
@@ -16,36 +29,26 @@ function makeEvent(overrides: Partial<OrchestratorEvent> = {}): OrchestratorEven
   };
 }
 
-const mockExecuteAction = vi.fn().mockResolvedValue({ successful: true });
-const mockActionsExecute = vi.fn().mockResolvedValue({ successful: true });
-const mockEntityExecute = vi.fn().mockResolvedValue({ successful: true });
-const mockGetEntity = vi.fn(() => ({ execute: mockEntityExecute }));
-
-vi.mock("composio-core", () => {
-  // Must use a regular function (not arrow) to be callable with `new`
-  function MockComposio() {
-    return { actions: { execute: mockActionsExecute } };
-  }
-  return { Composio: MockComposio };
-});
-
 describe("notifier-composio", () => {
-  const originalEnv = process.env.COMPOSIO_API_KEY;
+  const originalEnv = {
+    COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
+    COMPOSIO_USER_ID: process.env.COMPOSIO_USER_ID,
+    COMPOSIO_ENTITY_ID: process.env.COMPOSIO_ENTITY_ID,
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockExecuteAction.mockResolvedValue({ successful: true });
-    mockActionsExecute.mockResolvedValue({ successful: true });
-    mockEntityExecute.mockResolvedValue({ successful: true });
-    mockGetEntity.mockReturnValue({ execute: mockEntityExecute });
+    mockConstructorOptions.length = 0;
+    mockToolsExecute.mockResolvedValue({ successful: true });
     delete process.env.COMPOSIO_API_KEY;
+    delete process.env.COMPOSIO_USER_ID;
+    delete process.env.COMPOSIO_ENTITY_ID;
   });
 
   afterEach(() => {
-    if (originalEnv !== undefined) {
-      process.env.COMPOSIO_API_KEY = originalEnv;
-    } else {
-      delete process.env.COMPOSIO_API_KEY;
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value !== undefined) process.env[key] = value;
+      else delete process.env[key];
     }
   });
 
@@ -61,15 +64,24 @@ describe("notifier-composio", () => {
   });
 
   describe("create — config parsing", () => {
-    it("reads apiKey from config", () => {
+    it("reads apiKey from config", async () => {
       const notifier = create({ composioApiKey: "test-key" });
-      expect(notifier.name).toBe("composio");
+      await notifier.notify(makeEvent());
+      expect(mockConstructorOptions[0]).toEqual({ apiKey: "test-key" });
     });
 
-    it("reads apiKey from COMPOSIO_API_KEY env var", () => {
+    it("reads apiKey from COMPOSIO_API_KEY env var", async () => {
       process.env.COMPOSIO_API_KEY = "env-key";
       const notifier = create();
-      expect(notifier.name).toBe("composio");
+      await notifier.notify(makeEvent());
+      expect(mockConstructorOptions[0]).toEqual({ apiKey: "env-key" });
+    });
+
+    it("resolves env placeholders in composioApiKey config", async () => {
+      process.env.COMPOSIO_API_KEY = "placeholder-key";
+      const notifier = create({ composioApiKey: "${COMPOSIO_API_KEY}" });
+      await notifier.notify(makeEvent());
+      expect(mockConstructorOptions[0]).toEqual({ apiKey: "placeholder-key" });
     });
 
     it("throws on invalid defaultApp", () => {
@@ -84,6 +96,12 @@ describe("notifier-composio", () => {
 
     it("accepts discord as defaultApp", () => {
       expect(() => create({ composioApiKey: "k", defaultApp: "discord" })).not.toThrow();
+    });
+
+    it("throws on invalid Discord mode", () => {
+      expect(() => create({ composioApiKey: "k", defaultApp: "discord", mode: "voice" })).toThrow(
+        'Invalid Discord mode: "voice"',
+      );
     });
 
     it("accepts gmail as defaultApp with emailTo", () => {
@@ -102,9 +120,10 @@ describe("notifier-composio", () => {
       const notifier = create({ composioApiKey: "k" });
       await notifier.notify(makeEvent());
 
-      expect(mockActionsExecute).toHaveBeenCalledWith(
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "SLACK_SEND_MESSAGE",
         expect.objectContaining({
-          actionName: "SLACK_SEND_MESSAGE",
+          arguments: expect.objectContaining({ markdown_text: expect.any(String) }),
         }),
       );
     });
@@ -115,22 +134,68 @@ describe("notifier-composio", () => {
       const notifier = create({ composioApiKey: "k", defaultApp: "slack" });
       await notifier.notify(makeEvent());
 
-      expect(mockActionsExecute).toHaveBeenCalledWith(
+      expect(mockToolsExecute).toHaveBeenCalledWith("SLACK_SEND_MESSAGE", expect.any(Object));
+    });
+
+    it("calls DISCORDBOT_CREATE_MESSAGE for discord bot mode", async () => {
+      const notifier = create({
+        composioApiKey: "k",
+        defaultApp: "discord",
+        mode: "bot",
+        channelId: "1234567890",
+      });
+      await notifier.notify(makeEvent());
+
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "DISCORDBOT_CREATE_MESSAGE",
+        expect.any(Object),
+      );
+    });
+
+    it("calls DISCORDBOT_EXECUTE_WEBHOOK for discord webhook mode", async () => {
+      const notifier = create({
+        composioApiKey: "k",
+        defaultApp: "discord",
+        mode: "webhook",
+        webhookUrl: "https://discord.com/api/webhooks/1234567890/webhook-token",
+      });
+      await notifier.notify(makeEvent());
+
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "DISCORDBOT_EXECUTE_WEBHOOK",
         expect.objectContaining({
-          actionName: "SLACK_SEND_MESSAGE",
+          arguments: expect.objectContaining({
+            webhook_id: "1234567890",
+            webhook_token: "webhook-token",
+            content: expect.any(String),
+          }),
         }),
       );
     });
 
-    it("calls DISCORD_SEND_MESSAGE for discord app", async () => {
-      const notifier = create({ composioApiKey: "k", defaultApp: "discord" });
+    it("uses webhook mode when Discord webhookUrl is configured without mode", async () => {
+      const notifier = create({
+        composioApiKey: "k",
+        defaultApp: "discord",
+        webhookUrl: "https://discord.com/api/webhooks/1234567890/webhook-token",
+      });
       await notifier.notify(makeEvent());
 
-      expect(mockActionsExecute).toHaveBeenCalledWith(
-        expect.objectContaining({
-          actionName: "DISCORD_SEND_MESSAGE",
-        }),
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "DISCORDBOT_EXECUTE_WEBHOOK",
+        expect.any(Object),
       );
+    });
+
+    it("fails fast on invalid Discord webhook URLs", async () => {
+      const notifier = create({
+        composioApiKey: "k",
+        defaultApp: "discord",
+        mode: "webhook",
+        webhookUrl: "https://discord.com/not-a-webhook",
+      });
+
+      await expect(notifier.notify(makeEvent())).rejects.toThrow("Invalid Discord webhookUrl");
     });
 
     it("calls GMAIL_SEND_EMAIL for gmail app", async () => {
@@ -141,9 +206,13 @@ describe("notifier-composio", () => {
       });
       await notifier.notify(makeEvent());
 
-      expect(mockActionsExecute).toHaveBeenCalledWith(
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "GMAIL_SEND_EMAIL",
         expect.objectContaining({
-          actionName: "GMAIL_SEND_EMAIL",
+          arguments: expect.objectContaining({
+            recipient_email: "test@test.com",
+            subject: "Agent Orchestrator Notification",
+          }),
         }),
       );
     });
@@ -152,59 +221,123 @@ describe("notifier-composio", () => {
       const notifier = create({ composioApiKey: "k", channelId: "C123" });
       await notifier.notify(makeEvent());
 
-      const callArgs = mockActionsExecute.mock.calls[0][0];
-      expect(callArgs.requestBody.input.channel).toBe("C123");
+      const callArgs = mockToolsExecute.mock.calls[0][1];
+      expect(callArgs.arguments.channel).toBe("C123");
     });
 
     it("routes to normalized channelName when channelId not set", async () => {
       const notifier = create({ composioApiKey: "k", channelName: "#general" });
       await notifier.notify(makeEvent());
 
-      const callArgs = mockActionsExecute.mock.calls[0][0];
-      expect(callArgs.requestBody.input.channel).toBe("general");
+      const callArgs = mockToolsExecute.mock.calls[0][1];
+      expect(callArgs.arguments.channel).toBe("general");
     });
 
     it("includes priority emoji in Slack markdown text", async () => {
       const notifier = create({ composioApiKey: "k" });
       await notifier.notify(makeEvent({ priority: "urgent" }));
 
-      const callArgs = mockActionsExecute.mock.calls[0][0];
-      expect(callArgs.requestBody.input.markdown_text).toContain("\u{1F6A8}");
+      const callArgs = mockToolsExecute.mock.calls[0][1];
+      expect(callArgs.arguments.markdown_text).toContain("\u{1F6A8}");
     });
 
     it("includes prUrl when present as string", async () => {
       const notifier = create({ composioApiKey: "k" });
       await notifier.notify(makeEvent({ data: { prUrl: "https://github.com/pull/1" } }));
 
-      const callArgs = mockActionsExecute.mock.calls[0][0];
-      expect(callArgs.requestBody.input.markdown_text).toContain("https://github.com/pull/1");
+      const callArgs = mockToolsExecute.mock.calls[0][1];
+      expect(callArgs.arguments.markdown_text).toContain("https://github.com/pull/1");
     });
 
     it("ignores prUrl when not a string", async () => {
       const notifier = create({ composioApiKey: "k" });
       await notifier.notify(makeEvent({ data: { prUrl: 42 } }));
 
-      const callArgs = mockActionsExecute.mock.calls[0][0];
-      expect(callArgs.requestBody.input.markdown_text).not.toContain("PR:");
+      const callArgs = mockToolsExecute.mock.calls[0][1];
+      expect(callArgs.arguments.markdown_text).not.toContain("PR:");
     });
 
-    it("passes appName and connectedAccountId to the current SDK", async () => {
+    it("passes userId, connectedAccountId, and default Slack tool version", async () => {
       const notifier = create({
         composioApiKey: "k",
         defaultApp: "slack",
+        userId: "user_123",
         connectedAccountId: "ca_123",
       });
       await notifier.notify(makeEvent());
 
-      expect(mockActionsExecute).toHaveBeenCalledWith(
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "SLACK_SEND_MESSAGE",
         expect.objectContaining({
-          actionName: "SLACK_SEND_MESSAGE",
-          requestBody: expect.objectContaining({
-            appName: "slack",
-            connectedAccountId: "ca_123",
-          }),
+          userId: "user_123",
+          connectedAccountId: "ca_123",
+          version: "20260508_00",
         }),
       );
+    });
+
+    it("keeps entityId as a backward-compatible userId alias", async () => {
+      const notifier = create({ composioApiKey: "k", entityId: "legacy-user" });
+      await notifier.notify(makeEvent());
+
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "SLACK_SEND_MESSAGE",
+        expect.objectContaining({ userId: "legacy-user" }),
+      );
+    });
+
+    it("reads userId from COMPOSIO_USER_ID env var", async () => {
+      process.env.COMPOSIO_USER_ID = "env-user";
+      const notifier = create({ composioApiKey: "k" });
+      await notifier.notify(makeEvent());
+
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "SLACK_SEND_MESSAGE",
+        expect.objectContaining({ userId: "env-user" }),
+      );
+    });
+
+    it("supports configured toolVersion overrides", async () => {
+      const notifier = create({ composioApiKey: "k", toolVersion: "20260101_00" });
+      await notifier.notify(makeEvent());
+
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "SLACK_SEND_MESSAGE",
+        expect.objectContaining({ version: "20260101_00" }),
+      );
+    });
+
+    it("supports app-specific toolVersions overrides", async () => {
+      const notifier = create({
+        composioApiKey: "k",
+        toolVersion: "ignored",
+        toolVersions: { slack: "20260202_00" },
+      });
+      await notifier.notify(makeEvent());
+
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "SLACK_SEND_MESSAGE",
+        expect.objectContaining({ version: "20260202_00" }),
+      );
+    });
+
+    it("passes the default Gmail tool version", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const notifier = create({
+        composioApiKey: "k",
+        defaultApp: "gmail",
+        emailTo: "test@test.com",
+      });
+      await notifier.notify(makeEvent());
+
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "GMAIL_SEND_EMAIL",
+        expect.objectContaining({ version: "20260506_01" }),
+      );
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("No toolVersion configured"),
+      );
+      warnSpy.mockRestore();
     });
   });
 
@@ -217,9 +350,9 @@ describe("notifier-composio", () => {
       ];
       await notifier.notifyWithActions!(makeEvent(), actions);
 
-      const callArgs = mockActionsExecute.mock.calls[0][0];
-      expect(callArgs.requestBody.input.markdown_text).toContain("Merge");
-      expect(callArgs.requestBody.input.markdown_text).toContain("Kill");
+      const callArgs = mockToolsExecute.mock.calls[0][1];
+      expect(callArgs.arguments.markdown_text).toContain("Merge");
+      expect(callArgs.arguments.markdown_text).toContain("Kill");
     });
 
     it("includes URL actions as links", async () => {
@@ -227,8 +360,8 @@ describe("notifier-composio", () => {
       const actions: NotifyAction[] = [{ label: "View PR", url: "https://github.com/pull/42" }];
       await notifier.notifyWithActions!(makeEvent(), actions);
 
-      const callArgs = mockActionsExecute.mock.calls[0][0];
-      expect(callArgs.requestBody.input.markdown_text).toContain("https://github.com/pull/42");
+      const callArgs = mockToolsExecute.mock.calls[0][1];
+      expect(callArgs.arguments.markdown_text).toContain("https://github.com/pull/42");
     });
 
     it("renders callback-only actions without URL", async () => {
@@ -236,20 +369,26 @@ describe("notifier-composio", () => {
       const actions: NotifyAction[] = [{ label: "Restart", callbackEndpoint: "/api/restart" }];
       await notifier.notifyWithActions!(makeEvent(), actions);
 
-      const callArgs = mockActionsExecute.mock.calls[0][0];
-      expect(callArgs.requestBody.input.markdown_text).toContain("- Restart");
+      const callArgs = mockToolsExecute.mock.calls[0][1];
+      expect(callArgs.arguments.markdown_text).toContain("- Restart");
     });
 
     it("uses correct tool slug for configured app", async () => {
-      const notifier = create({ composioApiKey: "k", defaultApp: "discord" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const notifier = create({
+        composioApiKey: "k",
+        defaultApp: "discord",
+        mode: "bot",
+        channelId: "1234567890",
+      });
       const actions: NotifyAction[] = [{ label: "Test", url: "https://example.com" }];
       await notifier.notifyWithActions!(makeEvent(), actions);
 
-      expect(mockActionsExecute).toHaveBeenCalledWith(
-        expect.objectContaining({
-          actionName: "DISCORD_SEND_MESSAGE",
-        }),
+      expect(mockToolsExecute).toHaveBeenCalledWith(
+        "DISCORDBOT_CREATE_MESSAGE",
+        expect.any(Object),
       );
+      warnSpy.mockRestore();
     });
   });
 
@@ -258,16 +397,16 @@ describe("notifier-composio", () => {
       const notifier = create({ composioApiKey: "k" });
       await notifier.post!("Hello from AO");
 
-      const callArgs = mockActionsExecute.mock.calls[0][0];
-      expect(callArgs.requestBody.input.markdown_text).toBe("Hello from AO");
+      const callArgs = mockToolsExecute.mock.calls[0][1];
+      expect(callArgs.arguments.markdown_text).toBe("Hello from AO");
     });
 
     it("overrides channel from context", async () => {
       const notifier = create({ composioApiKey: "k", channelName: "#default" });
       await notifier.post!("test", { channel: "#override" });
 
-      const callArgs = mockActionsExecute.mock.calls[0][0];
-      expect(callArgs.requestBody.input.channel).toBe("override");
+      const callArgs = mockToolsExecute.mock.calls[0][1];
+      expect(callArgs.arguments.channel).toBe("override");
     });
 
     it("returns null", async () => {
@@ -279,7 +418,7 @@ describe("notifier-composio", () => {
 
   describe("error handling", () => {
     it("throws when SDK returns unsuccessful result", async () => {
-      mockActionsExecute.mockResolvedValueOnce({
+      mockToolsExecute.mockResolvedValueOnce({
         successful: false,
         error: "channel not found",
       });
@@ -289,7 +428,7 @@ describe("notifier-composio", () => {
     });
 
     it("wraps SDK error with descriptive message", async () => {
-      mockActionsExecute.mockResolvedValueOnce({
+      mockToolsExecute.mockResolvedValueOnce({
         successful: false,
         error: undefined,
       });
@@ -299,18 +438,31 @@ describe("notifier-composio", () => {
     });
 
     it("adds setup guidance when no connected account is found", async () => {
-      mockEntityExecute.mockRejectedValueOnce(
-        new Error("Could not find a connection with app='slack' and entity='default'"),
+      mockToolsExecute.mockRejectedValueOnce(
+        new Error("No connected account found for user default for toolkit slack"),
+      );
+
+      const notifier = create({ composioApiKey: "k" });
+
+      await expect(notifier.notify(makeEvent())).rejects.toThrow("ao setup composio");
+    });
+
+    it("uses mail setup guidance for Gmail connection errors", async () => {
+      mockToolsExecute.mockRejectedValueOnce(
+        new Error("No connected account found for user ao-local for toolkit gmail"),
       );
 
       const notifier = create({
         composioApiKey: "k",
-        _clientOverride: { getEntity: mockGetEntity },
+        defaultApp: "gmail",
+        emailTo: "test@test.com",
       });
 
-      await expect(notifier.notify(makeEvent())).rejects.toThrow(
-        "Connect slack in Composio, or set notifiers.composio.connectedAccountId / entityId",
-      );
+      await expect(notifier.notify(makeEvent())).rejects.toThrow("ao setup composio-mail");
+    });
+
+    it("rejects invalid test client overrides", () => {
+      expect(() => create({ composioApiKey: "k", _clientOverride: {} })).toThrow("tools.execute");
     });
   });
 
@@ -319,68 +471,33 @@ describe("notifier-composio", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const notifier = create();
       await notifier.notify(makeEvent());
-      expect(mockExecuteAction).not.toHaveBeenCalled();
-      expect(mockActionsExecute).not.toHaveBeenCalled();
-      expect(mockGetEntity).not.toHaveBeenCalled();
+      expect(mockToolsExecute).not.toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("No composioApiKey"));
       warnSpy.mockRestore();
     });
   });
 
-  describe("client adapter compatibility", () => {
-    it("supports legacy executeAction clients", async () => {
+  describe("client override", () => {
+    it("supports direct @composio/core tools.execute clients", async () => {
+      const execute = vi.fn().mockResolvedValue({ successful: true });
       const notifier = create({
         composioApiKey: "k",
-        _clientOverride: { executeAction: mockExecuteAction },
+        userId: "user_123",
+        connectedAccountId: "ca_123",
+        _clientOverride: { tools: { execute } },
       });
 
       await notifier.notify(makeEvent());
 
-      expect(mockExecuteAction).toHaveBeenCalledWith(
+      expect(execute).toHaveBeenCalledWith(
+        "SLACK_SEND_MESSAGE",
         expect.objectContaining({
-          action: "SLACK_SEND_MESSAGE",
-          params: expect.objectContaining({ markdown_text: expect.any(String) }),
-          appName: "slack",
+          userId: "user_123",
+          connectedAccountId: "ca_123",
+          arguments: expect.objectContaining({ markdown_text: expect.any(String) }),
         }),
       );
-    });
-
-    it("supports current SDK getEntity clients", async () => {
-      const notifier = create({
-        composioApiKey: "k",
-        entityId: "user_123",
-        connectedAccountId: "ca_123",
-        _clientOverride: { getEntity: mockGetEntity },
-      });
-
-      await notifier.notify(makeEvent());
-
-      expect(mockGetEntity).toHaveBeenCalledWith("user_123");
-      expect(mockEntityExecute).toHaveBeenCalledWith({
-        actionName: "SLACK_SEND_MESSAGE",
-        params: expect.objectContaining({ markdown_text: expect.any(String) }),
-        connectedAccountId: "ca_123",
-      });
-      expect(mockActionsExecute).not.toHaveBeenCalled();
-    });
-
-    it("supports real SDK actions.execute clients", async () => {
-      const notifier = create({
-        composioApiKey: "k",
-        _clientOverride: { actions: { execute: mockActionsExecute } },
-      });
-
-      await notifier.notify(makeEvent());
-
-      expect(mockActionsExecute).toHaveBeenCalledWith(
-        expect.objectContaining({
-          actionName: "SLACK_SEND_MESSAGE",
-          requestBody: {
-            input: expect.objectContaining({ markdown_text: expect.any(String) }),
-            appName: "slack",
-          },
-        }),
-      );
+      expect(mockToolsExecute).not.toHaveBeenCalled();
     });
   });
 });

@@ -123,6 +123,40 @@ notifiers:
     # url: http://127.0.0.1:18789/hooks/agent
     # token: \${OPENCLAW_HOOKS_TOKEN}
     # Run 'ao setup openclaw' for guided configuration
+  composio:
+    plugin: composio
+    # Run 'ao setup composio' to connect Slack through Composio
+    # userId: ao-local
+    # connectedAccountId: ca_...
+    # channelName: "#agents"
+    # composioApiKey: ak_... # optional; otherwise uses COMPOSIO_API_KEY
+    # toolVersion: "20260508_00" # optional Slack override
+  composio-discord:
+    plugin: composio
+    # Run 'ao setup composio-discord' for Discord webhook mode through Composio
+    # defaultApp: discord
+    # mode: webhook
+    # webhookUrl: https://discord.com/api/webhooks/...
+    # userId: ao-local
+    # connectedAccountId: ca_...
+    # composioApiKey: ak_... # optional; otherwise uses COMPOSIO_API_KEY
+  composio-discord-bot:
+    plugin: composio
+    # Run 'ao setup composio-discord-bot' for Discord bot mode through Composio
+    # defaultApp: discord
+    # mode: bot
+    # channelId: "1234567890"
+    # userId: ao-local
+    # connectedAccountId: ca_...
+    # composioApiKey: ak_... # optional; otherwise uses COMPOSIO_API_KEY
+  composio-mail:
+    plugin: composio
+    # Run 'ao setup composio-mail' to connect Gmail through Composio
+    # defaultApp: gmail
+    # emailTo: alerts@example.com
+    # userId: ao-local
+    # connectedAccountId: ca_...
+    # composioApiKey: ak_... # optional; otherwise uses COMPOSIO_API_KEY
 
 # ── Notification routing (optional) ─────────────────────────────────
 # Route notifications by priority level.

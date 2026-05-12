@@ -5,48 +5,111 @@ description: Route notifications through the Composio toolkit — Slack, Discord
 
 <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", margin: "0.5rem 0 1.25rem" }}>
   <Logo name="composio" size={28} />
-  <span style={{ fontSize: "0.8125rem", color: "var(--color-fd-muted-foreground)" }}>Slot: <code>notifier</code> · Name: <code>composio</code></span>
+  <span style={{ fontSize: "0.8125rem", color: "var(--color-fd-muted-foreground)" }}>
+    Slot: <code>notifier</code> · Name: <code>composio</code>
+  </span>
 </div>
 
 <PlatformSupport macos="full" linux="full" windows="full" />
 
-Uses the [Composio toolkit](https://composio.dev) to deliver notifications. Handy when you already have Composio set up for other agent tooling — a single credential covers Slack, Discord, and Gmail.
+Uses the [Composio toolkit](https://composio.dev) to deliver notifications. Handy when you already have Composio set up for other agent tooling — a single credential covers Slack, Discord, and Gmail. Discord supports a low-friction webhook mode and an advanced bot mode.
 
 ## Setup
 
-Install the Composio core package alongside AO:
+Run the guided setup for Slack:
 
 ```bash
-npm install -g composio-core
+export COMPOSIO_API_KEY=ak_...
+ao setup composio --user-id ao-local --channel "#agents"
 ```
 
-Export your Composio API key:
+If you already know the Slack connected account id, pass it directly:
 
 ```bash
-export COMPOSIO_API_KEY=cp_...
+ao setup composio --connected-account-id ca_...
 ```
+
+Run the Discord webhook setup when you only need channel notifications:
+
+```bash
+export COMPOSIO_API_KEY=ak_...
+ao setup composio-discord --webhook-url "https://discord.com/api/webhooks/..."
+```
+
+Run the Discord bot setup when you need a bot identity and channel-id based delivery:
+
+```bash
+export COMPOSIO_API_KEY=ak_...
+ao setup composio-discord-bot --channel-id "1234567890" --bot-token "$DISCORD_BOT_TOKEN"
+```
+
+The bot token is used once to create a Composio connected account. AO writes only the resulting `connectedAccountId`.
+
+Run the Gmail setup when you want AO notifications by email:
+
+```bash
+export COMPOSIO_API_KEY=ak_...
+ao setup composio-mail --email-to alerts@example.com
+```
+
+If no Gmail account is connected for the configured `userId`, setup prints a Composio OAuth URL. Open it, complete the Gmail authorization, then rerun the setup command to write the `connectedAccountId`.
 
 ## Use
 
 ```yaml title="agent-orchestrator.yaml"
-notifier:
-  - type: composio
-    defaultApp: slack             # slack | discord | gmail
-    channelName: "#agents"        # Slack / Discord
-    channelId: "..."              # optional, used if channelName is ambiguous
-    emailTo: alerts@example.com   # required when defaultApp=gmail
-    composioApiKey: ${CUSTOM}     # optional override; otherwise uses env
+notifiers:
+  composio:
+    plugin: composio
+    defaultApp: slack # slack | discord | gmail
+    userId: ao-local # Composio user id
+    connectedAccountId: ca_... # preferred when available
+    channelName: "#agents" # Slack
+    emailTo: alerts@example.com # required when defaultApp=gmail
+    composioApiKey: ak_... # optional override; otherwise uses env
+
+  composio-discord:
+    plugin: composio
+    defaultApp: discord
+    mode: webhook
+    webhookUrl: https://discord.com/api/webhooks/...
+    userId: ao-local
+    connectedAccountId: ca_...
+
+  composio-discord-bot:
+    plugin: composio
+    defaultApp: discord
+    mode: bot
+    channelId: "1234567890"
+    userId: ao-local
+    connectedAccountId: ca_...
+
+  composio-mail:
+    plugin: composio
+    defaultApp: gmail
+    emailTo: alerts@example.com
+    userId: ao-local
+    connectedAccountId: ca_...
 ```
 
 ## Config
 
-| Key | Required | Default | What it does |
-|---|---|---|---|
-| `defaultApp` | ✓ | `slack` | Which Composio app to target: `slack`, `discord`, or `gmail` |
-| `channelName` | for Slack/Discord | — | Channel name (Composio resolves it) |
-| `channelId` | optional | — | Explicit channel id when the name is ambiguous |
-| `emailTo` | ✓ when `gmail` | — | Recipient address |
-| `composioApiKey` | optional | env `COMPOSIO_API_KEY` | Override the API key from config |
+| Key                  | Required        | Default                | What it does                                                       |
+| -------------------- | --------------- | ---------------------- | ------------------------------------------------------------------ |
+| `defaultApp`         | ✓               | `slack`                | Which Composio app to target: `slack`, `discord`, or `gmail`       |
+| `mode`               | Discord only    | auto                   | `webhook` uses Discord webhooks; `bot` uses bot channel messages   |
+| `userId`             | optional        | `ao-local`             | Composio user id for connected-account lookup                      |
+| `entityId`           | optional        | —                      | Backward-compatible alias for `userId`                             |
+| `connectedAccountId` | recommended     | —                      | Specific connected account to use                                  |
+| `channelName`        | for Slack       | —                      | Slack channel name                                                 |
+| `channelId`          | Discord bot     | —                      | Discord channel id for bot mode                                    |
+| `webhookUrl`         | Discord webhook | —                      | Discord webhook URL for webhook mode                               |
+| `emailTo`            | ✓ when `gmail`  | —                      | Recipient address                                                  |
+| `composioApiKey`     | optional        | env `COMPOSIO_API_KEY` | Override the API key from config                                   |
+| `toolVersion`        | optional        | app default            | Tool version passed to `@composio/core`                            |
+| `toolVersions`       | optional        | —                      | App-specific tool versions, for example `{ slack: "20260508_00" }` |
+
+Slack defaults to `20260508_00`; Discord defaults to `20260429_01`; Gmail defaults to `20260506_01`. Discord uses Composio's `discordbot` toolkit for both webhook and bot modes.
+If `mode` is omitted for Discord, AO uses `webhook` when `webhookUrl` is present and `bot` otherwise.
 
 ## When to use
 

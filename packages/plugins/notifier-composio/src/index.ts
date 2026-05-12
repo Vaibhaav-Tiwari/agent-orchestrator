@@ -22,127 +22,78 @@ const PRIORITY_EMOJI: Record<EventPriority, string> = {
 };
 
 type ComposioApp = "slack" | "discord" | "gmail";
+type DiscordMode = "webhook" | "bot";
 
 const APP_TOOL_SLUG: Record<ComposioApp, string> = {
   slack: "SLACK_SEND_MESSAGE",
-  discord: "DISCORD_SEND_MESSAGE",
+  discord: "DISCORDBOT_CREATE_MESSAGE",
   gmail: "GMAIL_SEND_EMAIL",
 };
 
+const DEFAULT_TOOL_VERSION: Partial<Record<ComposioApp, string>> = {
+  slack: "20260508_00",
+  discord: "20260429_01",
+  gmail: "20260506_01",
+};
+
 const VALID_APPS = new Set<string>(["slack", "discord", "gmail"]);
+const VALID_DISCORD_MODES = new Set<string>(["webhook", "bot"]);
 
 const GMAIL_SUBJECT = "Agent Orchestrator Notification";
+const DISCORD_WEBHOOK_TOOL_SLUG = "DISCORDBOT_EXECUTE_WEBHOOK";
 
-interface ComposioToolkit {
-  executeAction(params: {
-    action: string;
-    params: Record<string, unknown>;
-    appName?: string;
-    connectedAccountId?: string;
-    entityId?: string;
-  }): Promise<{ successful: boolean; data?: unknown; error?: string }>;
+interface ComposioExecuteParams {
+  userId: string;
+  connectedAccountId?: string;
+  version?: string;
+  dangerouslySkipVersionCheck?: boolean;
+  arguments: Record<string, unknown>;
 }
 
-interface ComposioActionsClient {
-  actions?: {
-    execute?: (params: {
-      actionName: string;
-      requestBody: {
-        input: Record<string, unknown>;
-        appName?: string;
-        connectedAccountId?: string;
-      };
-    }) => Promise<{ successful: boolean; data?: unknown; error?: string }>;
+interface ComposioExecuteResult {
+  successful?: boolean;
+  data?: unknown;
+  error?: unknown;
+}
+
+interface ComposioToolsClient {
+  tools: {
+    execute(action: string, params: ComposioExecuteParams): Promise<ComposioExecuteResult>;
   };
 }
 
-interface ComposioEntity {
-  execute(params: {
-    actionName: string;
-    params: Record<string, unknown>;
-    connectedAccountId?: string;
-  }): Promise<{ successful: boolean; data?: unknown; error?: string }>;
-}
-
-interface ComposioEntityClient {
-  getEntity?: (entityId?: string) => ComposioEntity;
-}
-
-function hasExecuteAction(value: unknown): value is ComposioToolkit {
+function isComposioToolsClient(value: unknown): value is ComposioToolsClient {
   return (
     value !== null &&
     typeof value === "object" &&
-    typeof (value as ComposioToolkit).executeAction === "function"
+    "tools" in value &&
+    typeof (value as { tools?: { execute?: unknown } }).tools?.execute === "function"
   );
-}
-
-function hasActionsExecute(value: unknown): value is ComposioActionsClient {
-  const actions = (value as ComposioActionsClient | undefined)?.actions;
-  return actions !== undefined && typeof actions.execute === "function";
-}
-
-function hasEntityExecute(value: unknown): value is ComposioEntityClient {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    typeof (value as ComposioEntityClient).getEntity === "function"
-  );
-}
-
-function adaptComposioClient(client: unknown): ComposioToolkit {
-  if (hasExecuteAction(client)) return client;
-
-  if (hasEntityExecute(client)) {
-    return {
-      executeAction({ action, params, connectedAccountId, entityId }) {
-        return client.getEntity!(entityId ?? "default").execute({
-          actionName: action,
-          params,
-          ...(connectedAccountId ? { connectedAccountId } : {}),
-        });
-      },
-    };
-  }
-
-  if (hasActionsExecute(client)) {
-    return {
-      executeAction({ action, params, appName, connectedAccountId }) {
-        return client.actions!.execute!({
-          actionName: action,
-          requestBody: {
-            input: params,
-            ...(appName ? { appName } : {}),
-            ...(connectedAccountId ? { connectedAccountId } : {}),
-          },
-        });
-      },
-    };
-  }
-
-  throw new Error("Composio SDK client does not expose executeAction() or actions.execute()");
 }
 
 /**
- * Lazy-load composio-core SDK.
- * Returns null if the package is not installed.
+ * Lazy-load the bundled @composio/core SDK.
  *
- * We use dynamic import + unknown casting because composio-core is an
- * optional peer dependency — it may or may not be installed, and its
- * TypeScript types may not match our internal interface exactly.
+ * Dynamic import keeps the plugin lightweight at module-load time and lets
+ * tests inject a mock client at the I/O boundary.
  */
-async function loadComposioSDK(apiKey: string): Promise<ComposioToolkit | null> {
+async function loadComposioSDK(apiKey: string): Promise<ComposioToolsClient | null> {
   try {
-    // String literal import so vitest can intercept it for mocking.
-    // The `as unknown as …` cast is safe because we validate the shape below.
-    const mod = (await import("composio-core")) as unknown as Record<string, unknown>;
+    const mod = (await import("@composio/core")) as unknown as Record<string, unknown>;
     const ComposioClass = (mod.Composio ??
       (mod.default as Record<string, unknown> | undefined)?.Composio ??
       mod.default) as (new (opts: { apiKey: string }) => unknown) | undefined;
+
     if (typeof ComposioClass !== "function") {
-      throw new Error("Could not find Composio class in composio-core module");
+      throw new Error("Could not find Composio class in @composio/core module");
     }
+
     const client = new ComposioClass({ apiKey });
-    return adaptComposioClient(client);
+    if (!isComposioToolsClient(client)) {
+      throw new Error("Composio SDK client does not expose tools.execute()");
+    }
+
+    return client;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
@@ -156,6 +107,70 @@ async function loadComposioSDK(apiKey: string): Promise<ComposioToolkit | null> 
     }
     throw err;
   }
+}
+
+function stringConfig(
+  config: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = config?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function resolveEnvReference(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const match = value.match(/^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/);
+  if (!match) return value;
+  return process.env[match[1] ?? match[2] ?? ""];
+}
+
+function boolConfig(config: Record<string, unknown> | undefined, key: string): boolean {
+  return config?.[key] === true;
+}
+
+function parseDiscordWebhookUrl(webhookUrl: string): { webhookId: string; webhookToken: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(webhookUrl);
+  } catch {
+    throw new Error("[notifier-composio] Invalid Discord webhookUrl.");
+  }
+
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  const webhookIndex = segments.findIndex((segment) => segment === "webhooks");
+  const webhookId = webhookIndex >= 0 ? segments[webhookIndex + 1] : undefined;
+  const webhookToken = webhookIndex >= 0 ? segments[webhookIndex + 2] : undefined;
+
+  if (!webhookId || !webhookToken) {
+    throw new Error(
+      "[notifier-composio] Invalid Discord webhookUrl. Expected https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN",
+    );
+  }
+
+  return {
+    webhookId: decodeURIComponent(webhookId),
+    webhookToken: decodeURIComponent(webhookToken),
+  };
+}
+
+function resolveDiscordMode(
+  config: Record<string, unknown> | undefined,
+  defaultApp: ComposioApp,
+  webhookUrl: string | undefined,
+): DiscordMode | undefined {
+  if (defaultApp !== "discord") return undefined;
+
+  const mode = stringConfig(config, "mode");
+  if (mode) {
+    if (!VALID_DISCORD_MODES.has(mode)) {
+      throw new Error(
+        `[notifier-composio] Invalid Discord mode: "${mode}". Must be one of: webhook, bot`,
+      );
+    }
+    return mode as DiscordMode;
+  }
+
+  return webhookUrl ? "webhook" : "bot";
 }
 
 function formatNotifyText(event: OrchestratorEvent): string {
@@ -184,23 +199,47 @@ function normalizeSlackChannel(channel: string | undefined): string | undefined 
   return channel?.replace(/^#/, "");
 }
 
-function formatComposioError(err: unknown, app: ComposioApp): Error {
-  const message = err instanceof Error ? err.message : String(err);
-  if (message.includes("Could not find a connection")) {
+function formatUnknownError(value: unknown): string {
+  if (value instanceof Error) return value.message;
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatComposioError(err: unknown, app: ComposioApp, discordMode?: DiscordMode): Error {
+  const message = formatUnknownError(err);
+  const lower = message.toLowerCase();
+  if (lower.includes("connected account") || lower.includes("could not find a connection")) {
+    const setupCommand = setupCommandForApp(app, discordMode);
     return new Error(
-      `[notifier-composio] ${message}. Connect ${app} in Composio, or set notifiers.composio.connectedAccountId / entityId to an active connection.`,
+      `[notifier-composio] ${message}. Run \`${setupCommand}\`, connect ${app} in Composio, or set connectedAccountId / userId. entityId is still supported as an alias for userId.`,
     );
   }
 
   return err instanceof Error ? err : new Error(message);
 }
 
+function setupCommandForApp(app: ComposioApp, discordMode?: DiscordMode): string {
+  if (app === "discord") {
+    return discordMode === "webhook"
+      ? "ao setup composio-discord"
+      : "ao setup composio-discord-bot";
+  }
+  if (app === "gmail") return "ao setup composio-mail";
+  return "ao setup composio";
+}
+
 function buildToolArgs(
   app: ComposioApp,
+  discordMode: DiscordMode | undefined,
   text: string,
   channelId?: string,
   channelName?: string,
   emailTo?: string,
+  webhookUrl?: string,
 ): Record<string, unknown> {
   if (app === "slack") {
     const args: Record<string, unknown> = { markdown_text: text };
@@ -210,41 +249,89 @@ function buildToolArgs(
   }
 
   if (app === "discord") {
+    if (discordMode === "webhook") {
+      if (!webhookUrl) {
+        throw new Error(
+          '[notifier-composio] webhookUrl is required when defaultApp is "discord" and mode is "webhook"',
+        );
+      }
+      const parsed = parseDiscordWebhookUrl(webhookUrl);
+      return {
+        webhook_id: parsed.webhookId,
+        webhook_token: parsed.webhookToken,
+        content: text,
+      };
+    }
+
     const args: Record<string, unknown> = { content: text };
-    // Discord requires numeric channel IDs — channelName is not supported
+    // Discord requires numeric channel IDs — channelName is accepted as a manual fallback.
     if (channelId) args.channel_id = channelId;
     else if (channelName) args.channel_id = channelName;
+    else {
+      throw new Error(
+        '[notifier-composio] channelId is required when defaultApp is "discord" and mode is "bot"',
+      );
+    }
     return args;
   }
 
-  // gmail — emailTo is required, validated at config time
   return {
-    to: emailTo ?? "",
+    recipient_email: emailTo ?? "",
     subject: GMAIL_SUBJECT,
     body: text,
   };
 }
 
+function resolveToolVersion(
+  config: Record<string, unknown> | undefined,
+  app: ComposioApp,
+): string | undefined {
+  const toolVersions = config?.["toolVersions"];
+  if (toolVersions && typeof toolVersions === "object") {
+    const appVersion = (toolVersions as Record<string, unknown>)[app];
+    if (typeof appVersion === "string" && appVersion.trim().length > 0) {
+      return appVersion;
+    }
+  }
+
+  return stringConfig(config, "toolVersion") ?? DEFAULT_TOOL_VERSION[app];
+}
+
+function resolveToolSlug(app: ComposioApp, discordMode: DiscordMode | undefined): string {
+  if (app === "discord" && discordMode === "webhook") return DISCORD_WEBHOOK_TOOL_SLUG;
+  return APP_TOOL_SLUG[app];
+}
+
 export function create(config?: Record<string, unknown>): Notifier {
   const apiKey =
-    (typeof config?.composioApiKey === "string" ? config.composioApiKey : undefined) ??
-    process.env.COMPOSIO_API_KEY;
+    resolveEnvReference(stringConfig(config, "composioApiKey")) ?? process.env.COMPOSIO_API_KEY;
   const defaultApp: ComposioApp =
     typeof config?.defaultApp === "string" && VALID_APPS.has(config.defaultApp)
       ? (config.defaultApp as ComposioApp)
       : "slack";
-  const channelName = typeof config?.channelName === "string" ? config.channelName : undefined;
-  const channelId = typeof config?.channelId === "string" ? config.channelId : undefined;
-  const entityId = typeof config?.entityId === "string" ? config.entityId : undefined;
-  const connectedAccountId =
-    typeof config?.connectedAccountId === "string" ? config.connectedAccountId : undefined;
-  const emailTo = typeof config?.emailTo === "string" ? config.emailTo : undefined;
+  const channelName = stringConfig(config, "channelName");
+  const channelId = stringConfig(config, "channelId");
+  const webhookUrl = resolveEnvReference(stringConfig(config, "webhookUrl"));
+  const discordMode = resolveDiscordMode(config, defaultApp, webhookUrl);
+  const userId =
+    stringConfig(config, "userId") ??
+    stringConfig(config, "entityId") ??
+    process.env.COMPOSIO_USER_ID ??
+    process.env.COMPOSIO_ENTITY_ID ??
+    "ao-local";
+  const connectedAccountId = stringConfig(config, "connectedAccountId");
+  const emailTo = stringConfig(config, "emailTo");
+  const toolVersion = resolveToolVersion(config, defaultApp);
+  const forceSkipVersionCheck = boolConfig(config, "dangerouslySkipVersionCheck");
 
-  // Internal: allows tests to inject a mock client without mocking composio-core
   const clientOverride =
     config?._clientOverride !== undefined && config._clientOverride !== null
-      ? adaptComposioClient(config._clientOverride)
+      ? config._clientOverride
       : undefined;
+
+  if (clientOverride !== undefined && !isComposioToolsClient(clientOverride)) {
+    throw new Error("[notifier-composio] _clientOverride must expose tools.execute()");
+  }
 
   if (typeof config?.defaultApp === "string" && !VALID_APPS.has(config.defaultApp)) {
     throw new Error(
@@ -256,13 +343,21 @@ export function create(config?: Record<string, unknown>): Notifier {
     throw new Error('[notifier-composio] emailTo is required when defaultApp is "gmail"');
   }
 
-  let client: ComposioToolkit | null | undefined = clientOverride;
+  if (defaultApp === "discord" && discordMode === "webhook" && !webhookUrl) {
+    throw new Error(
+      '[notifier-composio] webhookUrl is required when defaultApp is "discord" and mode is "webhook"',
+    );
+  }
+
+  let client: ComposioToolsClient | null | undefined = clientOverride as
+    | ComposioToolsClient
+    | undefined;
   let warnedNoKey = false;
+  let warnedSkipVersion = false;
   let sdkMissing = false;
 
-  async function getClient(): Promise<ComposioToolkit | null> {
-    // If a client override was injected, always use it
-    if (clientOverride) return clientOverride;
+  async function getClient(): Promise<ComposioToolsClient | null> {
+    if (clientOverride) return clientOverride as ComposioToolsClient;
 
     if (!apiKey) {
       if (!warnedNoKey) {
@@ -280,9 +375,8 @@ export function create(config?: Record<string, unknown>): Notifier {
       client = await loadComposioSDK(apiKey);
       if (client === null) {
         sdkMissing = true;
-        // eslint-disable-next-line no-console
         console.warn(
-          "[notifier-composio] composio-core package is not installed — notifications will be no-ops. Run: npm install composio-core",
+          "[notifier-composio] @composio/core package is not installed — notifications will be no-ops.",
         );
         return null;
       }
@@ -292,21 +386,29 @@ export function create(config?: Record<string, unknown>): Notifier {
   }
 
   async function executeWithTimeout(
-    composio: ComposioToolkit,
+    composio: ComposioToolsClient,
     action: string,
-    params: Record<string, unknown>,
+    args: Record<string, unknown>,
   ): Promise<void> {
     const timeoutMs = 30_000;
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
-
-    const actionPromise = composio.executeAction({
-      action,
-      params,
-      appName: defaultApp,
-      ...(entityId ? { entityId } : {}),
+    const executeParams: ComposioExecuteParams = {
+      userId,
+      arguments: args,
       ...(connectedAccountId ? { connectedAccountId } : {}),
-    });
-    // Prevent unhandled rejection if the timeout fires and actionPromise later rejects
+      ...(toolVersion ? { version: toolVersion } : { dangerouslySkipVersionCheck: true }),
+      ...(forceSkipVersionCheck ? { dangerouslySkipVersionCheck: true } : {}),
+    };
+
+    if (!toolVersion && !warnedSkipVersion) {
+      console.warn(
+        `[notifier-composio] No toolVersion configured for ${defaultApp}; using Composio latest-version execution.`,
+      );
+      warnedSkipVersion = true;
+    }
+
+    const actionPromise = composio.tools.execute(action, executeParams);
+    // Prevent unhandled rejection if the timeout fires and actionPromise later rejects.
     actionPromise.catch(() => {});
 
     const result = await Promise.race([
@@ -325,12 +427,12 @@ export function create(config?: Record<string, unknown>): Notifier {
         );
       }),
     ]).catch((err: unknown) => {
-      throw formatComposioError(err, defaultApp);
+      throw formatComposioError(err, defaultApp, discordMode);
     });
 
-    if (!result.successful) {
+    if (result.successful === false) {
       throw new Error(
-        `[notifier-composio] Composio action ${action} failed: ${result.error ?? "unknown error"}`,
+        `[notifier-composio] Composio action ${action} failed: ${formatUnknownError(result.error ?? "unknown error")}`,
       );
     }
   }
@@ -343,8 +445,16 @@ export function create(config?: Record<string, unknown>): Notifier {
       if (!composio) return;
 
       const text = formatNotifyText(event);
-      const toolSlug = APP_TOOL_SLUG[defaultApp];
-      const args = buildToolArgs(defaultApp, text, channelId, channelName, emailTo);
+      const toolSlug = resolveToolSlug(defaultApp, discordMode);
+      const args = buildToolArgs(
+        defaultApp,
+        discordMode,
+        text,
+        channelId,
+        channelName,
+        emailTo,
+        webhookUrl,
+      );
 
       await executeWithTimeout(composio, toolSlug, args);
     },
@@ -354,8 +464,16 @@ export function create(config?: Record<string, unknown>): Notifier {
       if (!composio) return;
 
       const text = formatActionsText(event, actions);
-      const toolSlug = APP_TOOL_SLUG[defaultApp];
-      const args = buildToolArgs(defaultApp, text, channelId, channelName, emailTo);
+      const toolSlug = resolveToolSlug(defaultApp, discordMode);
+      const args = buildToolArgs(
+        defaultApp,
+        discordMode,
+        text,
+        channelId,
+        channelName,
+        emailTo,
+        webhookUrl,
+      );
 
       await executeWithTimeout(composio, toolSlug, args);
     },
@@ -366,13 +484,21 @@ export function create(config?: Record<string, unknown>): Notifier {
 
       const channel = context?.channel ?? channelId ?? channelName;
       const slackChannel = normalizeSlackChannel(channel);
-      const toolSlug = APP_TOOL_SLUG[defaultApp];
+      const toolSlug = resolveToolSlug(defaultApp, discordMode);
 
       const args: Record<string, unknown> =
         defaultApp === "gmail"
           ? { to: emailTo ?? "", subject: GMAIL_SUBJECT, body: message }
           : defaultApp === "discord"
-            ? { content: message, ...(channel ? { channel_id: channel } : {}) }
+            ? buildToolArgs(
+                defaultApp,
+                discordMode,
+                message,
+                discordMode === "bot" ? channel : channelId,
+                channelName,
+                emailTo,
+                webhookUrl,
+              )
             : { markdown_text: message, ...(slackChannel ? { channel: slackChannel } : {}) };
 
       await executeWithTimeout(composio, toolSlug, args);

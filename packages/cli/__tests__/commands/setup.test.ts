@@ -38,6 +38,34 @@ const { mockProbeGateway, mockValidateToken, mockDetectOpenClawInstallation } = 
   mockDetectOpenClawInstallation: vi.fn(),
 }));
 
+const {
+  mockComposioConstructorOptions,
+  mockAuthConfigsList,
+  mockAuthConfigsCreate,
+  mockAuthConfigsRetrieve,
+  mockConnectedAccountsList,
+  mockConnectedAccountsGet,
+  mockConnectedAccountsLink,
+  mockConnectedAccountsInitiate,
+  mockConnectedAccountsWaitForConnection,
+  mockToolkitsAuthorize,
+} = vi.hoisted(() => ({
+  mockComposioConstructorOptions: [] as Array<Record<string, unknown>>,
+  mockAuthConfigsList: vi.fn(),
+  mockAuthConfigsCreate: vi.fn(),
+  mockAuthConfigsRetrieve: vi.fn(),
+  mockConnectedAccountsList: vi.fn(),
+  mockConnectedAccountsGet: vi.fn(),
+  mockConnectedAccountsLink: vi.fn(),
+  mockConnectedAccountsInitiate: vi.fn(),
+  mockConnectedAccountsWaitForConnection: vi.fn(),
+  mockToolkitsAuthorize: vi.fn(),
+}));
+
+const { mockFetch } = vi.hoisted(() => ({
+  mockFetch: vi.fn(),
+}));
+
 vi.mock("@aoagents/ao-core", () => ({
   CONFIG_SCHEMA_URL:
     "https://raw.githubusercontent.com/ComposioHQ/agent-orchestrator/main/schema/config.schema.json",
@@ -74,6 +102,31 @@ vi.mock("../../src/lib/openclaw-probe.js", () => ({
   DEFAULT_OPENCLAW_URL: "http://127.0.0.1:18789",
   HOOKS_PATH: "/hooks/agent",
 }));
+
+vi.mock("@composio/core", () => {
+  function MockComposio(opts: Record<string, unknown>) {
+    mockComposioConstructorOptions.push(opts);
+    return {
+      authConfigs: {
+        list: mockAuthConfigsList,
+        create: mockAuthConfigsCreate,
+        get: mockAuthConfigsRetrieve,
+        retrieve: mockAuthConfigsRetrieve,
+      },
+      connectedAccounts: {
+        list: mockConnectedAccountsList,
+        get: mockConnectedAccountsGet,
+        link: mockConnectedAccountsLink,
+        initiate: mockConnectedAccountsInitiate,
+        waitForConnection: mockConnectedAccountsWaitForConnection,
+      },
+      toolkits: {
+        authorize: mockToolkitsAuthorize,
+      },
+    };
+  }
+  return { Composio: MockComposio };
+});
 
 import { registerSetup } from "../../src/commands/setup.js";
 
@@ -116,6 +169,750 @@ function createProgram(): Command {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe("setup composio command", () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    process.env = { ...originalEnv };
+    mockComposioConstructorOptions.length = 0;
+    mockFindConfigFile.mockReturnValue("/tmp/agent-orchestrator.yaml");
+    mockReadFileSync.mockReturnValue(MINIMAL_CONFIG);
+    mockWriteFileSync.mockImplementation(() => {});
+    mockAuthConfigsList.mockResolvedValue({
+      items: [{ id: "auth_slack_123", toolkit: { slug: "slack" } }],
+    });
+    mockAuthConfigsCreate.mockResolvedValue({
+      id: "auth_slack_created",
+      toolkit: { slug: "slack" },
+    });
+    mockAuthConfigsRetrieve.mockResolvedValue({
+      id: "auth_slack_123",
+      toolkit: { slug: "slack" },
+      toolAccessConfig: {},
+    });
+    mockConnectedAccountsList.mockResolvedValue({
+      items: [
+        {
+          id: "ca_slack_123",
+          status: "ACTIVE",
+          toolkit: { slug: "slack" },
+          isDisabled: false,
+        },
+      ],
+    });
+    mockConnectedAccountsGet.mockImplementation((id: string) =>
+      Promise.resolve({
+        id,
+        status: "ACTIVE",
+        toolkit: { slug: "slack" },
+        isDisabled: false,
+      }),
+    );
+    mockConnectedAccountsWaitForConnection.mockResolvedValue({
+      id: "ca_waited",
+      status: "ACTIVE",
+      toolkit: { slug: "slack" },
+      isDisabled: false,
+    });
+    mockConnectedAccountsLink.mockResolvedValue({
+      id: "conn_req_123",
+      redirectUrl: "https://composio.dev/connect/slack",
+      waitForConnection: vi.fn().mockResolvedValue({
+        id: "ca_authorized",
+        status: "ACTIVE",
+        toolkit: { slug: "slack" },
+        isDisabled: false,
+      }),
+    });
+    mockConnectedAccountsInitiate.mockResolvedValue({
+      id: "ca_discord_123",
+      status: "ACTIVE",
+    });
+    mockToolkitsAuthorize.mockResolvedValue({
+      id: "conn_req_123",
+      redirectUrl: "https://composio.dev/connect/slack",
+      waitForConnection: vi.fn().mockResolvedValue({
+        id: "ca_authorized",
+        status: "ACTIVE",
+        toolkit: { slug: "slack" },
+        isDisabled: false,
+      }),
+    });
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: vi.fn().mockResolvedValue({ id: "1234567890", name: "general" }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.unstubAllGlobals();
+  });
+
+  it("registers the composio setup command", () => {
+    const program = createProgram();
+    const setup = program.commands.find((command) => command.name() === "setup");
+    expect(setup?.commands.some((command) => command.name() === "composio")).toBe(true);
+    expect(setup?.commands.some((command) => command.name() === "composio-discord")).toBe(true);
+    expect(setup?.commands.some((command) => command.name() === "composio-discord-bot")).toBe(true);
+    expect(setup?.commands.some((command) => command.name() === "composio-mail")).toBe(true);
+  });
+
+  it("writes Composio config with a discovered Slack connected account", async () => {
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio",
+      "--api-key",
+      "ak_test",
+      "--user-id",
+      "ao-user",
+      "--channel",
+      "iamasx",
+      "--non-interactive",
+    ]);
+
+    expect(mockComposioConstructorOptions).toEqual([{ apiKey: "ak_test" }]);
+    expect(mockConnectedAccountsList).toHaveBeenCalledWith({
+      userIds: ["ao-user"],
+      toolkitSlugs: ["slack"],
+      statuses: ["ACTIVE"],
+      limit: 25,
+    });
+
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    const parsed = parseYaml(writtenYaml) as {
+      defaults?: { notifiers?: string[] };
+      notifiers?: Record<string, Record<string, unknown>>;
+      notificationRouting?: Record<string, string[]>;
+    };
+
+    expect(parsed.notifiers?.["composio"]).toMatchObject({
+      plugin: "composio",
+      defaultApp: "slack",
+      composioApiKey: "ak_test",
+      userId: "ao-user",
+      channelName: "iamasx",
+      connectedAccountId: "ca_slack_123",
+    });
+    expect(parsed.defaults?.notifiers).toContain("composio");
+    expect(parsed.notificationRouting?.["urgent"]).toContain("composio");
+    expect(parsed.notificationRouting?.["action"]).toContain("composio");
+    expect(parsed.notificationRouting?.["warning"]).toContain("composio");
+    expect(parsed.notificationRouting?.["info"]).toContain("composio");
+  });
+
+  it("uses COMPOSIO_API_KEY and does not write the env value to config", async () => {
+    process.env.COMPOSIO_API_KEY = "ak_env";
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio",
+      "--user-id",
+      "ao-user",
+      "--non-interactive",
+    ]);
+
+    expect(mockComposioConstructorOptions).toEqual([{ apiKey: "ak_env" }]);
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    expect(writtenYaml).not.toContain("ak_env");
+  });
+
+  it("verifies and stores an explicit connected account id", async () => {
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio",
+      "--api-key",
+      "ak_test",
+      "--connected-account-id",
+      "ca_explicit",
+      "--non-interactive",
+    ]);
+
+    expect(mockConnectedAccountsGet).toHaveBeenCalledWith("ca_explicit");
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    const parsed = parseYaml(writtenYaml) as {
+      notifiers?: Record<string, Record<string, unknown>>;
+    };
+    expect(parsed.notifiers?.["composio"]?.["connectedAccountId"]).toBe("ca_explicit");
+  });
+
+  it("fails in non-interactive mode when multiple Slack accounts need selection", async () => {
+    mockConnectedAccountsList.mockResolvedValue({
+      items: [
+        { id: "ca_one", status: "ACTIVE", toolkit: { slug: "slack" } },
+        { id: "ca_two", status: "ACTIVE", toolkit: { slug: "slack" } },
+      ],
+    });
+    const program = createProgram();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit");
+    });
+
+    await expect(
+      program.parseAsync([
+        "node",
+        "test",
+        "setup",
+        "composio",
+        "--api-key",
+        "ak_test",
+        "--non-interactive",
+      ]),
+    ).rejects.toThrow("process.exit");
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it("creates a Slack connect request when no active account exists", async () => {
+    mockConnectedAccountsList.mockResolvedValue({ items: [] });
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio",
+      "--api-key",
+      "ak_test",
+      "--user-id",
+      "ao-user",
+      "--wait-ms",
+      "1",
+      "--non-interactive",
+    ]);
+
+    expect(mockAuthConfigsList).toHaveBeenCalledWith({ toolkit: "slack" });
+    expect(mockConnectedAccountsLink).toHaveBeenCalledWith("ao-user", "auth_slack_123", {
+      allowMultiple: true,
+    });
+    expect(mockToolkitsAuthorize).not.toHaveBeenCalled();
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    expect(writtenYaml).toContain("connectedAccountId: ca_authorized");
+  });
+
+  it("creates a Slack auth config before linking when none exists", async () => {
+    mockConnectedAccountsList.mockResolvedValue({ items: [] });
+    mockAuthConfigsList.mockResolvedValue({ items: [] });
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio",
+      "--api-key",
+      "ak_test",
+      "--user-id",
+      "ao-user",
+      "--wait-ms",
+      "1",
+      "--non-interactive",
+    ]);
+
+    expect(mockAuthConfigsCreate).toHaveBeenCalledWith("slack", {
+      type: "use_composio_managed_auth",
+      name: "Slack Auth Config",
+    });
+    expect(mockConnectedAccountsLink).toHaveBeenCalledWith("ao-user", "auth_slack_created", {
+      allowMultiple: true,
+    });
+  });
+
+  it("shows status without writing config", async () => {
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio",
+      "--api-key",
+      "ak_test",
+      "--status",
+    ]);
+
+    expect(mockConnectedAccountsList).toHaveBeenCalled();
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it("fails on conflicting composio notifier config unless --force is set", async () => {
+    mockReadFileSync.mockReturnValue(`
+notifiers:
+  composio:
+    plugin: webhook
+projects:
+  my-app:
+    name: my-app
+`);
+    const program = createProgram();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit");
+    });
+
+    await expect(
+      program.parseAsync([
+        "node",
+        "test",
+        "setup",
+        "composio",
+        "--api-key",
+        "ak_test",
+        "--non-interactive",
+      ]),
+    ).rejects.toThrow("process.exit");
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it("writes Composio Discord webhook config and creates a bearer connected account", async () => {
+    mockAuthConfigsCreate.mockResolvedValueOnce({
+      id: "auth_discord_created",
+      toolkit: { slug: "discordbot" },
+    });
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio-discord",
+      "--api-key",
+      "ak_test",
+      "--webhook-url",
+      "https://discord.com/api/webhooks/1234567890/webhook-token",
+      "--non-interactive",
+    ]);
+
+    expect(mockAuthConfigsCreate).toHaveBeenCalledWith("discordbot", {
+      type: "use_custom_auth",
+      name: "Discord Webhook Auth Config",
+      authScheme: "BEARER_TOKEN",
+    });
+    expect(mockConnectedAccountsInitiate).toHaveBeenCalledWith("ao-local", "auth_discord_created", {
+      config: {
+        authScheme: "BEARER_TOKEN",
+        val: {
+          status: "ACTIVE",
+          token: "webhook-token",
+        },
+      },
+    });
+
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    const parsed = parseYaml(writtenYaml) as {
+      defaults?: { notifiers?: string[] };
+      notifiers?: Record<string, Record<string, unknown>>;
+      notificationRouting?: Record<string, string[]>;
+    };
+
+    expect(parsed.notifiers?.["composio-discord"]).toMatchObject({
+      plugin: "composio",
+      defaultApp: "discord",
+      mode: "webhook",
+      webhookUrl: "https://discord.com/api/webhooks/1234567890/webhook-token",
+      userId: "ao-local",
+      connectedAccountId: "ca_discord_123",
+      toolVersion: "20260429_01",
+      composioApiKey: "ak_test",
+    });
+    expect(parsed.defaults?.notifiers).toContain("composio-discord");
+    expect(parsed.notificationRouting?.["urgent"]).toContain("composio-discord");
+    expect(writtenYaml).not.toContain("botToken");
+  });
+
+  it("writes Composio Discord bot config and does not persist the bot token", async () => {
+    mockAuthConfigsCreate.mockResolvedValueOnce({
+      id: "auth_discord_created",
+      toolkit: { slug: "discordbot" },
+    });
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio-discord-bot",
+      "--api-key",
+      "ak_test",
+      "--channel-id",
+      "1234567890",
+      "--bot-token",
+      "bot-token",
+      "--non-interactive",
+    ]);
+
+    expect(mockFetch).toHaveBeenCalledWith("https://discord.com/api/v10/channels/1234567890", {
+      headers: {
+        Authorization: "Bot bot-token",
+      },
+    });
+    expect(mockAuthConfigsCreate).toHaveBeenCalledWith("discordbot", {
+      type: "use_custom_auth",
+      name: "Discord Bot Auth Config",
+      authScheme: "BEARER_TOKEN",
+    });
+    expect(mockConnectedAccountsInitiate).toHaveBeenCalledWith("ao-local", "auth_discord_created", {
+      config: {
+        authScheme: "BEARER_TOKEN",
+        val: {
+          status: "ACTIVE",
+          token: "bot-token",
+        },
+      },
+    });
+
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    const parsed = parseYaml(writtenYaml) as {
+      defaults?: { notifiers?: string[] };
+      notifiers?: Record<string, Record<string, unknown>>;
+      notificationRouting?: Record<string, string[]>;
+    };
+
+    expect(parsed.notifiers?.["composio-discord-bot"]).toMatchObject({
+      plugin: "composio",
+      defaultApp: "discord",
+      mode: "bot",
+      channelId: "1234567890",
+      userId: "ao-local",
+      connectedAccountId: "ca_discord_123",
+      toolVersion: "20260429_01",
+      composioApiKey: "ak_test",
+    });
+    expect(parsed.defaults?.notifiers).toContain("composio-discord-bot");
+    expect(parsed.notificationRouting?.["urgent"]).toContain("composio-discord-bot");
+    expect(writtenYaml).not.toContain("bot-token");
+  });
+
+  it("fails Discord bot setup when the bot cannot access the channel", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: "Forbidden",
+      json: vi.fn().mockResolvedValue({ message: "Missing Access" }),
+    });
+    const program = createProgram();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit");
+    });
+
+    await expect(
+      program.parseAsync([
+        "node",
+        "test",
+        "setup",
+        "composio-discord-bot",
+        "--api-key",
+        "ak_test",
+        "--channel-id",
+        "1234567890",
+        "--bot-token",
+        "bot-token",
+        "--non-interactive",
+      ]),
+    ).rejects.toThrow("process.exit");
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it("writes Discord bot config from an explicit connected account without a bot token", async () => {
+    mockConnectedAccountsGet.mockResolvedValue({
+      id: "ca_discord_explicit",
+      status: "ACTIVE",
+      toolkit: { slug: "discordbot" },
+      isDisabled: false,
+    });
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio-discord-bot",
+      "--api-key",
+      "ak_test",
+      "--channel-id",
+      "1234567890",
+      "--connected-account-id",
+      "ca_discord_explicit",
+      "--non-interactive",
+    ]);
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockConnectedAccountsInitiate).not.toHaveBeenCalled();
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    const parsed = parseYaml(writtenYaml) as {
+      notifiers?: Record<string, Record<string, unknown>>;
+    };
+    expect(parsed.notifiers?.["composio-discord-bot"]?.["connectedAccountId"]).toBe(
+      "ca_discord_explicit",
+    );
+  });
+
+  it("writes Composio mail config with a discovered Gmail connected account", async () => {
+    mockConnectedAccountsList.mockResolvedValue({
+      items: [
+        {
+          id: "ca_gmail_123",
+          status: "ACTIVE",
+          toolkit: { slug: "gmail" },
+          isDisabled: false,
+        },
+      ],
+    });
+    mockConnectedAccountsGet.mockResolvedValue({
+      id: "ca_gmail_123",
+      status: "ACTIVE",
+      toolkit: { slug: "gmail" },
+      isDisabled: false,
+      data: {
+        scope:
+          "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.metadata",
+      },
+    });
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio-mail",
+      "--api-key",
+      "ak_test",
+      "--user-id",
+      "ao-user",
+      "--email-to",
+      "admin@example.com",
+      "--non-interactive",
+    ]);
+
+    expect(mockConnectedAccountsList).toHaveBeenCalledWith({
+      userIds: ["ao-user"],
+      toolkitSlugs: ["gmail"],
+      statuses: ["ACTIVE"],
+      limit: 25,
+    });
+
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    const parsed = parseYaml(writtenYaml) as {
+      defaults?: { notifiers?: string[] };
+      notifiers?: Record<string, Record<string, unknown>>;
+      notificationRouting?: Record<string, string[]>;
+    };
+
+    expect(parsed.notifiers?.["composio-mail"]).toMatchObject({
+      plugin: "composio",
+      defaultApp: "gmail",
+      emailTo: "admin@example.com",
+      userId: "ao-user",
+      connectedAccountId: "ca_gmail_123",
+      toolVersion: "20260506_01",
+      composioApiKey: "ak_test",
+    });
+    expect(parsed.defaults?.notifiers).toContain("composio-mail");
+    expect(parsed.notificationRouting?.["urgent"]).toContain("composio-mail");
+  });
+
+  it("uses a reusable Gmail send auth config when no active account exists", async () => {
+    mockConnectedAccountsList.mockResolvedValue({ items: [] });
+    mockAuthConfigsList.mockResolvedValueOnce({
+      items: [
+        {
+          id: "auth_gmail_send",
+          toolkit: { slug: "gmail" },
+          toolAccessConfig: {
+            toolsForConnectedAccountCreation: ["GMAIL_SEND_EMAIL"],
+          },
+        },
+      ],
+    });
+    mockConnectedAccountsLink.mockResolvedValue({
+      id: "conn_req_gmail",
+      redirectUrl: "https://composio.dev/connect/gmail",
+      waitForConnection: vi.fn().mockResolvedValue({
+        id: "ca_gmail_authorized",
+        status: "ACTIVE",
+        toolkit: { slug: "gmail" },
+        isDisabled: false,
+        data: {
+          scope:
+            "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.metadata",
+        },
+      }),
+    });
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio-mail",
+      "--api-key",
+      "ak_test",
+      "--email-to",
+      "admin@example.com",
+      "--wait-ms",
+      "1",
+      "--non-interactive",
+    ]);
+
+    expect(mockAuthConfigsList).toHaveBeenCalledWith({ toolkit: "gmail" });
+    expect(mockAuthConfigsCreate).not.toHaveBeenCalledWith("gmail", expect.anything());
+    expect(mockConnectedAccountsLink).toHaveBeenCalledWith("ao-local", "auth_gmail_send", {
+      allowMultiple: true,
+    });
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    expect(writtenYaml).toContain("connectedAccountId: ca_gmail_authorized");
+  });
+
+  it("creates a Gmail send auth config when no reusable send config exists", async () => {
+    mockConnectedAccountsList.mockResolvedValue({ items: [] });
+    mockAuthConfigsList.mockResolvedValueOnce({ items: [] });
+    mockAuthConfigsCreate.mockResolvedValueOnce({ id: "auth_gmail_created" });
+    mockConnectedAccountsLink.mockResolvedValue({
+      id: "conn_req_gmail",
+      redirectUrl: "https://composio.dev/connect/gmail",
+      waitForConnection: vi.fn().mockResolvedValue(null),
+    });
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio-mail",
+      "--api-key",
+      "ak_test",
+      "--email-to",
+      "admin@example.com",
+      "--wait-ms",
+      "1",
+      "--non-interactive",
+    ]);
+
+    expect(mockAuthConfigsCreate).toHaveBeenCalledWith("gmail", {
+      type: "use_composio_managed_auth",
+      name: "Gmail Auth Config",
+      toolAccessConfig: {
+        toolsForConnectedAccountCreation: ["GMAIL_SEND_EMAIL"],
+      },
+    });
+    expect(mockConnectedAccountsLink).toHaveBeenCalledWith("ao-local", "auth_gmail_created", {
+      allowMultiple: true,
+    });
+  });
+
+  it("writes mail config from an explicit Gmail connected account", async () => {
+    mockConnectedAccountsGet.mockResolvedValue({
+      id: "ca_gmail_explicit",
+      status: "ACTIVE",
+      toolkit: { slug: "gmail" },
+      isDisabled: false,
+      data: {
+        scope:
+          "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.metadata",
+      },
+    });
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio-mail",
+      "--api-key",
+      "ak_test",
+      "--email-to",
+      "admin@example.com",
+      "--connected-account-id",
+      "ca_gmail_explicit",
+      "--non-interactive",
+    ]);
+
+    expect(mockConnectedAccountsGet).toHaveBeenCalledWith("ca_gmail_explicit");
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    const parsed = parseYaml(writtenYaml) as {
+      notifiers?: Record<string, Record<string, unknown>>;
+    };
+    expect(parsed.notifiers?.["composio-mail"]?.["connectedAccountId"]).toBe("ca_gmail_explicit");
+  });
+
+  it("creates a fresh Gmail connect request when the existing Gmail account lacks send scopes", async () => {
+    mockReadFileSync.mockReturnValue(`
+notifiers:
+  composio-mail:
+    plugin: composio
+    defaultApp: gmail
+    composioApiKey: ak_existing
+    emailTo: admin@example.com
+    connectedAccountId: ca_gmail_old
+projects:
+  my-app:
+    name: my-app
+`);
+    mockConnectedAccountsGet.mockResolvedValue({
+      id: "ca_gmail_old",
+      status: "ACTIVE",
+      toolkit: { slug: "gmail" },
+      isDisabled: false,
+      data: {
+        scope: "openid https://www.googleapis.com/auth/userinfo.email",
+      },
+    });
+    mockConnectedAccountsList.mockResolvedValue({ items: [] });
+    mockAuthConfigsList.mockResolvedValueOnce({ items: [] });
+    mockAuthConfigsCreate.mockResolvedValueOnce({ id: "auth_gmail_send" });
+    mockConnectedAccountsLink.mockResolvedValue({
+      id: "conn_req_gmail",
+      redirectUrl: "https://composio.dev/connect/gmail",
+      waitForConnection: vi.fn().mockResolvedValue(null),
+    });
+    const program = createProgram();
+
+    await program.parseAsync([
+      "node",
+      "test",
+      "setup",
+      "composio-mail",
+      "--wait-ms",
+      "1",
+      "--non-interactive",
+    ]);
+
+    expect(mockAuthConfigsCreate).toHaveBeenCalledWith(
+      "gmail",
+      expect.objectContaining({
+        toolAccessConfig: {
+          toolsForConnectedAccountCreation: ["GMAIL_SEND_EMAIL"],
+        },
+      }),
+    );
+    const writtenYaml = mockWriteFileSync.mock.calls[0][1] as string;
+    const parsed = parseYaml(writtenYaml) as {
+      notifiers?: Record<string, Record<string, unknown>>;
+    };
+    expect(parsed.notifiers?.["composio-mail"]?.["connectedAccountId"]).toBeUndefined();
+  });
+});
 
 describe("setup openclaw command", () => {
   const originalEnv = { ...process.env };

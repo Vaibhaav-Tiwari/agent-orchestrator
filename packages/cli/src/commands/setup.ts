@@ -27,6 +27,17 @@ import {
   runDesktopSetupAction,
   type DesktopSetupOptions,
 } from "../lib/desktop-setup.js";
+import {
+  ComposioSetupError,
+  runComposioDiscordBotSetupAction,
+  runComposioDiscordWebhookSetupAction,
+  runComposioMailSetupAction,
+  runComposioSetupAction,
+  type ComposioDiscordBotSetupOptions,
+  type ComposioDiscordWebhookSetupOptions,
+  type ComposioMailSetupOptions,
+  type ComposioSetupOptions,
+} from "../lib/composio-setup.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -512,6 +523,97 @@ export function registerSetup(program: Command): void {
         await runDesktopSetupAction(opts);
       } catch (err) {
         if (err instanceof DesktopSetupError) {
+          console.error(err.message);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
+    });
+
+  setup
+    .command("composio")
+    .description("Connect AO notifications to Composio Slack")
+    .option("--api-key <key>", "Composio API key (otherwise uses COMPOSIO_API_KEY)")
+    .option("--user-id <id>", "Composio user id for the Slack connected account")
+    .option("--channel <name-or-id>", "Slack channel name or channel id")
+    .option("--connected-account-id <id>", "Existing Composio Slack connected account id")
+    .option("--wait-ms <ms>", "How long to wait for a new Slack connection", "60000")
+    .option("--non-interactive", "Skip prompts and fail when multiple accounts need selection")
+    .option("--status", "Show Composio notifier setup status without changing config")
+    .option("--force", "Replace a conflicting notifiers.composio entry")
+    .action(async (opts: ComposioSetupOptions) => {
+      try {
+        await runComposioSetupAction(opts);
+      } catch (err) {
+        if (err instanceof ComposioSetupError) {
+          console.error(err.message);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
+    });
+
+  setup
+    .command("composio-discord")
+    .description("Connect AO notifications to Discord webhooks through Composio")
+    .option("--api-key <key>", "Composio API key (otherwise uses COMPOSIO_API_KEY)")
+    .option("--user-id <id>", "Composio user id for the Discord connected account")
+    .option("--webhook-url <url>", "Discord webhook URL")
+    .option("--connected-account-id <id>", "Existing Composio Discord connected account id")
+    .option("--non-interactive", "Skip prompts")
+    .option("--status", "Show Composio Discord webhook setup status without changing config")
+    .option("--force", "Replace a conflicting notifiers.composio-discord entry")
+    .action(async (opts: ComposioDiscordWebhookSetupOptions) => {
+      try {
+        await runComposioDiscordWebhookSetupAction(opts);
+      } catch (err) {
+        if (err instanceof ComposioSetupError) {
+          console.error(err.message);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
+    });
+
+  setup
+    .command("composio-discord-bot")
+    .description("Connect AO notifications to a Discord bot through Composio")
+    .option("--api-key <key>", "Composio API key (otherwise uses COMPOSIO_API_KEY)")
+    .option("--user-id <id>", "Composio user id for the Discord connected account")
+    .option("--channel-id <id>", "Discord channel id")
+    .option("--bot-token <token>", "Discord bot token used once to create the Composio account")
+    .option("--connected-account-id <id>", "Existing Composio Discord bot connected account id")
+    .option("--non-interactive", "Skip prompts")
+    .option("--status", "Show Composio Discord bot setup status without changing config")
+    .option("--force", "Replace a conflicting notifiers.composio-discord-bot entry")
+    .action(async (opts: ComposioDiscordBotSetupOptions) => {
+      try {
+        await runComposioDiscordBotSetupAction(opts);
+      } catch (err) {
+        if (err instanceof ComposioSetupError) {
+          console.error(err.message);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
+    });
+
+  setup
+    .command("composio-mail")
+    .description("Connect AO notifications to Gmail through Composio")
+    .option("--api-key <key>", "Composio API key (otherwise uses COMPOSIO_API_KEY)")
+    .option("--user-id <id>", "Composio user id for the Gmail connected account")
+    .option("--email-to <email>", "Recipient email address for AO notifications")
+    .option("--connected-account-id <id>", "Existing Composio Gmail connected account id")
+    .option("--wait-ms <ms>", "How long to wait for a new Gmail connection", "60000")
+    .option("--non-interactive", "Skip prompts and fail when multiple accounts need selection")
+    .option("--status", "Show Composio mail setup status without changing config")
+    .option("--force", "Replace a conflicting notifiers.composio-mail entry")
+    .action(async (opts: ComposioMailSetupOptions) => {
+      try {
+        await runComposioMailSetupAction(opts);
+      } catch (err) {
+        if (err instanceof ComposioSetupError) {
           console.error(err.message);
           process.exit(err.exitCode);
         }
