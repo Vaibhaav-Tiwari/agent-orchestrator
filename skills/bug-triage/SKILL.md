@@ -245,9 +245,9 @@ python3 skills/bug-triage/scripts/push_fix_to_github.py \
 <how to verify>"
 ```
 
-The script reads from GitHub API, applies one replacement, pushes, opens PR — no local checkout needed. **Verify `OLD_STRING` matches GitHub first:** `gh api repos/<repo>/contents/<path>?ref=main -q '.content' | base64 -d`
+The script reads from GitHub API, applies one replacement, pushes, opens PR — no local checkout needed. **Verify `OLD_STRING` matches GitHub first:** `gh api repos/<repo>/contents/<path>?ref=main -q '.content' | python3 -c "import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))"`
 
-**Multiple edits to same file:** The push script does one replacement per run. For multiple changes, use `execute_code` to read from the branch, apply all replacements, then push via `gh api -X PUT` with the updated SHA.
+**Multiple edits to same file:** The push script does one replacement per run. For multiple changes, use a Python script to read from the branch (`gh api` + `base64.b64decode`), apply all replacements, then push via `gh api -X PUT` with the updated SHA.
 
 ### 5g. Report back
 
@@ -278,7 +278,7 @@ Issue URL, PR URL (if created), labels, root cause summary, whether fix agent wa
 
 ```bash
 gh api repos/{owner}/{repo}/git/trees/main?recursive=1 --jq '.tree[].path'    # list files
-gh api repos/{owner}/{repo}/contents/{path} --jq '.content' | base64 -d        # read file
+gh api repos/{owner}/{repo}/contents/{path} --jq '.content' | python3 -c "import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))"  # read file
 gh search code "term" --repo {owner}/{repo} --json path --jq '.[].path'        # search code
 gh api "repos/{owner}/{repo}/commits?path={path}&per_page=10" --jq '.[] | "\(.sha[0:8]) \(.commit.message | split("\n")[0])"'  # file history
 ```
@@ -306,6 +306,6 @@ Example: [PR #1608](https://github.com/ComposioHQ/agent-orchestrator/pull/1608) 
 - **Record the commit hash** you analyzed — code changes fast.
 - **GitHub issue is mandatory** — every triaged bug gets one, even if fix is trivial.
 - **`gh api --jq .content` truncates large files** (>~100KB). Use local git instead.
-- **Push script arg limits** — long commit messages hit `OSError: Argument list too long`. Use `execute_code` with JSON payloads.
+- **Push script arg limits** — long commit messages hit `OSError: Argument list too long`. Use a Python script with JSON payloads instead.
 - **`OLD_STRING` must match GitHub byte-for-byte** — local code may differ from `origin/main`.
 - **New fields on shared TS interfaces MUST be optional** (`field?: Type`). Downstream `Partial<X>` spreads break on required fields. Example: [PR #1523](https://github.com/ComposioHQ/agent-orchestrator/pull/1523).
