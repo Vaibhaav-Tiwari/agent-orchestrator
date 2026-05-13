@@ -29,6 +29,14 @@ function makeEvent(overrides: Partial<OrchestratorEvent> = {}): OrchestratorEven
   };
 }
 
+function makeV3Data(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 3,
+    subject: { session: { id: "app-1", projectId: "my-project" } },
+    ...overrides,
+  };
+}
+
 describe("notifier-composio", () => {
   const originalEnv = {
     COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
@@ -245,17 +253,26 @@ describe("notifier-composio", () => {
       expect(callArgs.arguments.markdown_text).toContain("\u{1F6A8}");
     });
 
-    it("includes prUrl when present as string", async () => {
+    it("includes subject.pr.url when present in v3 data", async () => {
       const notifier = create({ composioApiKey: "k" });
-      await notifier.notify(makeEvent({ data: { prUrl: "https://github.com/pull/1" } }));
+      await notifier.notify(
+        makeEvent({
+          data: makeV3Data({
+            subject: {
+              session: { id: "app-1", projectId: "my-project" },
+              pr: { number: 1, url: "https://github.com/pull/1" },
+            },
+          }),
+        }),
+      );
 
       const callArgs = mockToolsExecute.mock.calls[0][1];
       expect(callArgs.arguments.markdown_text).toContain("https://github.com/pull/1");
     });
 
-    it("ignores prUrl when not a string", async () => {
+    it("ignores legacy flat prUrl", async () => {
       const notifier = create({ composioApiKey: "k" });
-      await notifier.notify(makeEvent({ data: { prUrl: 42 } }));
+      await notifier.notify(makeEvent({ data: { prUrl: "https://github.com/pull/1" } }));
 
       const callArgs = mockToolsExecute.mock.calls[0][1];
       expect(callArgs.arguments.markdown_text).not.toContain("PR:");

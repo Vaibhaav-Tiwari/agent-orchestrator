@@ -1,11 +1,18 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { NotifyAction, OrchestratorEvent } from "./types.js";
+import type { NotificationDataV3 } from "./notification-data.js";
 import { atomicWriteFileSync } from "./atomic-write.js";
 import { getObservabilityBaseDir } from "./paths.js";
 
 export const DEFAULT_DASHBOARD_NOTIFICATION_LIMIT = 50;
 export const MAX_DASHBOARD_NOTIFICATION_LIMIT = 500;
+
+export interface LegacyDashboardNotificationData {
+  [key: string]: unknown;
+}
+
+export type DashboardNotificationEventData = NotificationDataV3 | LegacyDashboardNotificationData;
 
 export interface SerializedDashboardEvent {
   id: string;
@@ -15,7 +22,7 @@ export interface SerializedDashboardEvent {
   projectId: string;
   timestamp: string;
   message: string;
-  data: Record<string, unknown>;
+  data: DashboardNotificationEventData;
 }
 
 export interface SerializedDashboardAction {
@@ -52,11 +59,11 @@ export function getDashboardNotificationStorePath(configPath: string): string {
   return join(getObservabilityBaseDir(configPath), "dashboard-notifications.jsonl");
 }
 
-function toJsonRecord(value: unknown): Record<string, unknown> {
+function toJsonRecord(value: unknown): DashboardNotificationEventData {
   try {
     const serialized = JSON.parse(JSON.stringify(value ?? {})) as unknown;
     if (serialized && typeof serialized === "object" && !Array.isArray(serialized)) {
-      return serialized as Record<string, unknown>;
+      return serialized as DashboardNotificationEventData;
     }
   } catch {
     // Fall through to a small marker below. Notifications should not fail

@@ -16,6 +16,14 @@ function makeEvent(overrides: Partial<OrchestratorEvent> = {}): OrchestratorEven
   };
 }
 
+function makeV3Data(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 3,
+    subject: { session: { id: "app-1", projectId: "my-project" } },
+    ...overrides,
+  };
+}
+
 function mockFetchOk() {
   return vi.fn().mockResolvedValue({
     ok: true,
@@ -204,7 +212,32 @@ describe("notifier-slack", () => {
       expect(context.elements[0].text).toContain("*Priority:* action");
     });
 
-    it("includes PR link when prUrl is a string in event data", async () => {
+    it("includes PR link when subject.pr.url is present in v3 data", async () => {
+      const fetchMock = mockFetchOk();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const notifier = create({ webhookUrl: "https://hooks.slack.com/test" });
+      await notifier.notify(
+        makeEvent({
+          data: makeV3Data({
+            subject: {
+              session: { id: "app-1", projectId: "my-project" },
+              pr: { number: 42, url: "https://github.com/org/repo/pull/42" },
+            },
+          }),
+        }),
+      );
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      const prBlock = body.blocks.find(
+        (b: Record<string, unknown>) =>
+          b.type === "section" && (b as any).text?.text?.includes("View Pull Request"),
+      );
+      expect(prBlock).toBeDefined();
+      expect(prBlock.text.text).toContain("https://github.com/org/repo/pull/42");
+    });
+
+    it("ignores legacy flat prUrl", async () => {
       const fetchMock = mockFetchOk();
       vi.stubGlobal("fetch", fetchMock);
 
@@ -216,31 +249,15 @@ describe("notifier-slack", () => {
         (b: Record<string, unknown>) =>
           b.type === "section" && (b as any).text?.text?.includes("View Pull Request"),
       );
-      expect(prBlock).toBeDefined();
-      expect(prBlock.text.text).toContain("https://github.com/org/repo/pull/42");
-    });
-
-    it("ignores prUrl when it is not a string", async () => {
-      const fetchMock = mockFetchOk();
-      vi.stubGlobal("fetch", fetchMock);
-
-      const notifier = create({ webhookUrl: "https://hooks.slack.com/test" });
-      await notifier.notify(makeEvent({ data: { prUrl: 12345 } }));
-
-      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-      const prBlock = body.blocks.find(
-        (b: Record<string, unknown>) =>
-          b.type === "section" && (b as any).text?.text?.includes("View Pull Request"),
-      );
       expect(prBlock).toBeUndefined();
     });
 
-    it("ignores ciStatus when it is not a string", async () => {
+    it("ignores legacy flat ciStatus", async () => {
       const fetchMock = mockFetchOk();
       vi.stubGlobal("fetch", fetchMock);
 
       const notifier = create({ webhookUrl: "https://hooks.slack.com/test" });
-      await notifier.notify(makeEvent({ data: { ciStatus: { nested: true } } }));
+      await notifier.notify(makeEvent({ data: { ciStatus: "passing" } }));
 
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       const ciBlock = body.blocks.find(
@@ -250,12 +267,12 @@ describe("notifier-slack", () => {
       expect(ciBlock).toBeUndefined();
     });
 
-    it("includes CI status when ciStatus is a string", async () => {
+    it("includes CI status when ci.status is present in v3 data", async () => {
       const fetchMock = mockFetchOk();
       vi.stubGlobal("fetch", fetchMock);
 
       const notifier = create({ webhookUrl: "https://hooks.slack.com/test" });
-      await notifier.notify(makeEvent({ data: { ciStatus: "passing" } }));
+      await notifier.notify(makeEvent({ data: makeV3Data({ ci: { status: "passing" } }) }));
 
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       const ciBlock = body.blocks.find(
@@ -271,7 +288,16 @@ describe("notifier-slack", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       const notifier = create({ webhookUrl: "https://hooks.slack.com/test" });
-      await notifier.notify(makeEvent({ data: { ciStatus: "failing" } }));
+      await notifier.notify(
+        makeEvent({
+          data: makeV3Data({
+            ci: {
+              status: "failing",
+              failedChecks: [{ name: "typecheck", status: "failed" }],
+            },
+          }),
+        }),
+      );
 
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       const ciBlock = body.blocks.find(
@@ -279,6 +305,7 @@ describe("notifier-slack", () => {
           b.type === "context" && (b as any).elements?.[0]?.text?.includes("CI:"),
       );
       expect(ciBlock.elements[0].text).toContain(":x:");
+      expect(ciBlock.elements[0].text).toContain("typecheck");
     });
 
     it("ends with a divider block", async () => {

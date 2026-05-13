@@ -16,6 +16,14 @@ function makeEvent(overrides: Partial<OrchestratorEvent> = {}): OrchestratorEven
   };
 }
 
+function makeV3Data(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 3,
+    subject: { session: { id: "ao-5", projectId: "ao" } },
+    ...overrides,
+  };
+}
+
 describe("notifier-discord", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -79,7 +87,16 @@ describe("notifier-discord", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const notifier = create({ webhookUrl: "https://discord.com/api/webhooks/123/abc" });
-    await notifier.notify(makeEvent({ data: { prUrl: "https://github.com/org/repo/pull/42" } }));
+    await notifier.notify(
+      makeEvent({
+        data: makeV3Data({
+          subject: {
+            session: { id: "ao-5", projectId: "ao" },
+            pr: { number: 42, url: "https://github.com/org/repo/pull/42" },
+          },
+        }),
+      }),
+    );
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     const prField = body.embeds[0].fields.find((f: { name: string }) => f.name === "Pull Request");
@@ -91,7 +108,7 @@ describe("notifier-discord", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const notifier = create({ webhookUrl: "https://discord.com/api/webhooks/123/abc" });
-    await notifier.notify(makeEvent({ data: { ciStatus: "passing" } }));
+    await notifier.notify(makeEvent({ data: makeV3Data({ ci: { status: "passing" } }) }));
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     const ciField = body.embeds[0].fields.find((f: { name: string }) => f.name === "CI");
@@ -131,7 +148,10 @@ describe("notifier-discord", () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
     vi.stubGlobal("fetch", fetchMock);
 
-    const notifier = create({ webhookUrl: "https://discord.com/api/webhooks/123/abc", username: "AO Bot" });
+    const notifier = create({
+      webhookUrl: "https://discord.com/api/webhooks/123/abc",
+      username: "AO Bot",
+    });
     await notifier.notify(makeEvent());
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);

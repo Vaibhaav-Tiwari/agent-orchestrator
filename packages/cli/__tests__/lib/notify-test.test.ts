@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Notifier, OrchestratorConfig, OrchestratorEvent, PluginRegistry } from "@aoagents/ao-core";
+import type {
+  Notifier,
+  OrchestratorConfig,
+  OrchestratorEvent,
+  PluginRegistry,
+} from "@aoagents/ao-core";
 import {
   addSinkNotifierConfig,
   createNotifyTestEvent,
@@ -66,11 +71,23 @@ describe("notify test helper", () => {
     expect(event.type).toBe("ci.failing");
     expect(event.priority).toBe("action");
     expect(event.data).toMatchObject({
-      prNumber: 1579,
-      prUrl: "https://github.com/ComposioHQ/agent-orchestrator/pull/1579",
-      ciStatus: "failing",
-      failedChecks: ["typecheck", "unit-tests"],
+      schemaVersion: 3,
+      semanticType: "ci.failing",
+      subject: {
+        pr: {
+          number: 1579,
+          url: "https://github.com/ComposioHQ/agent-orchestrator/pull/1579",
+        },
+      },
+      ci: {
+        status: "failing",
+        failedChecks: [
+          { name: "typecheck", status: "failed" },
+          { name: "unit-tests", status: "failed" },
+        ],
+      },
     });
+    expect(event.data.prUrl).toBeUndefined();
   });
 
   it("merges valid --data JSON and rejects invalid JSON", () => {

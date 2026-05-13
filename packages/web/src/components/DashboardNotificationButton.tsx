@@ -26,9 +26,56 @@ function formatRelativeTime(isoDate: string): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
-function stringData(data: Record<string, unknown>, key: string): string | null {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringField(data: Record<string, unknown>, key: string): string | null {
   const value = data[key];
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function booleanField(data: Record<string, unknown>, key: string): boolean | null {
+  const value = data[key];
+  return typeof value === "boolean" ? value : null;
+}
+
+function recordField(data: Record<string, unknown>, key: string): Record<string, unknown> | null {
+  const value = data[key];
+  return isRecord(value) ? value : null;
+}
+
+function notificationDataV3(
+  notification: DashboardNotificationRecord,
+): Record<string, unknown> | null {
+  const data = notification.event.data;
+  return isRecord(data) && data.schemaVersion === 3 ? data : null;
+}
+
+function getSubjectPR(notification: DashboardNotificationRecord): Record<string, unknown> | null {
+  const data = notificationDataV3(notification);
+  if (!data) return null;
+  const subject = recordField(data, "subject");
+  return subject ? recordField(subject, "pr") : null;
+}
+
+function getPRUrl(notification: DashboardNotificationRecord): string | null {
+  const pr = getSubjectPR(notification);
+  return pr ? stringField(pr, "url") : null;
+}
+
+function getReviewUrl(notification: DashboardNotificationRecord): string | null {
+  const data = notificationDataV3(notification);
+  if (!data) return null;
+  const review = recordField(data, "review");
+  return review ? stringField(review, "url") : null;
+}
+
+function getEscalationCause(notification: DashboardNotificationRecord): string | null {
+  const data = notificationDataV3(notification);
+  if (!data) return null;
+  const escalation = recordField(data, "escalation");
+  return escalation ? stringField(escalation, "cause") : null;
 }
 
 function priorityClass(priority: string): string {
@@ -43,25 +90,24 @@ function normalizeEventText(value: string): string {
 }
 
 function successNotificationLabel(notification: DashboardNotificationRecord): string | null {
-  const { event } = notification;
-  const type = normalizeEventText(event.type);
-  const message = normalizeEventText(event.message);
+  const data = notificationDataV3(notification);
+  if (!data) return null;
 
-  if (
-    type === "summary.all-complete" ||
-    type.includes("all-complete") ||
-    message.includes("all-complete")
-  ) {
+  const semanticType = stringField(data, "semanticType");
+  if (semanticType && normalizeEventText(semanticType) === "summary.all-complete") {
     return "all complete";
   }
 
+  const merge = recordField(data, "merge");
+  const review = recordField(data, "review");
+  const mergeReady = merge ? booleanField(merge, "ready") : null;
+  const reviewDecision = review ? stringField(review, "decision") : null;
+
   if (
-    type === "merge.ready" ||
-    type === "review.approved" ||
-    type.includes("approved") ||
-    type.includes("merge-ready") ||
-    message.includes("approved-and-green") ||
-    message.includes("ready-to-merge")
+    semanticType === "merge.ready" ||
+    semanticType === "review.approved" ||
+    mergeReady === true ||
+    reviewDecision === "approved"
   ) {
     return "approved";
   }
@@ -113,8 +159,9 @@ function NotificationItem({
 }) {
   const { event } = notification;
   const sessionHref = projectSessionPath(event.projectId, event.sessionId);
-  const prUrl = stringData(event.data, "prUrl");
-  const reviewUrl = stringData(event.data, "reviewUrl");
+  const prUrl = getPRUrl(notification);
+  const reviewUrl = getReviewUrl(notification);
+  const escalationCause = getEscalationCause(notification);
   const successLabel = successNotificationLabel(notification);
   const label = successLabel ?? event.priority;
   const urlActions = (notification.actions ?? []).filter(
@@ -138,6 +185,7 @@ function NotificationItem({
         <div className="dashboard-notification-item__meta">
           <span>{event.projectId}</span>
           <span>{event.sessionId}</span>
+          {escalationCause ? <span>{escalationCause.replace(/_/g, " ")}</span> : null}
         </div>
         <div className="dashboard-notification-item__links">
           <Link href={sessionHref}>Session</Link>

@@ -1,33 +1,105 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Command } from "commander";
 
-const {
-  mockCreatePluginRegistry,
-  mockFindConfigFile,
-  mockLoadConfig,
-  mockRegistry,
-} = vi.hoisted(() => ({
-  mockCreatePluginRegistry: vi.fn(),
-  mockFindConfigFile: vi.fn(),
-  mockLoadConfig: vi.fn(),
-  mockRegistry: {
-    loadFromConfig: vi.fn(),
-    get: vi.fn(),
-    list: vi.fn(),
-    register: vi.fn(),
-    loadBuiltins: vi.fn(),
-  },
-}));
-
-vi.mock("@aoagents/ao-core", () => ({
-  createPluginRegistry: (...args: unknown[]) => mockCreatePluginRegistry(...args),
-  findConfigFile: (...args: unknown[]) => mockFindConfigFile(...args),
-  loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
-  resolveNotifierTarget: (config: { notifiers?: Record<string, { plugin?: string }> }, reference: string) => ({
-    reference,
-    pluginName: config.notifiers?.[reference]?.plugin ?? reference,
+const { mockCreatePluginRegistry, mockFindConfigFile, mockLoadConfig, mockRegistry } = vi.hoisted(
+  () => ({
+    mockCreatePluginRegistry: vi.fn(),
+    mockFindConfigFile: vi.fn(),
+    mockLoadConfig: vi.fn(),
+    mockRegistry: {
+      loadFromConfig: vi.fn(),
+      get: vi.fn(),
+      list: vi.fn(),
+      register: vi.fn(),
+      loadBuiltins: vi.fn(),
+    },
   }),
-}));
+);
+
+vi.mock("@aoagents/ao-core", () => {
+  function buildSubject(input: {
+    sessionId: string;
+    projectId: string;
+    context?: { pr?: Record<string, unknown> | null };
+  }) {
+    return {
+      session: { id: input.sessionId, projectId: input.projectId },
+      ...(input.context?.pr ? { pr: input.context.pr } : {}),
+    };
+  }
+
+  function baseData(input: {
+    sessionId: string;
+    projectId: string;
+    context?: { pr?: Record<string, unknown> | null };
+    semanticType?: string;
+  }) {
+    return {
+      schemaVersion: 3,
+      semanticType: input.semanticType,
+      subject: buildSubject(input),
+    };
+  }
+
+  return {
+    createPluginRegistry: (...args: unknown[]) => mockCreatePluginRegistry(...args),
+    findConfigFile: (...args: unknown[]) => mockFindConfigFile(...args),
+    loadConfig: (...args: unknown[]) => mockLoadConfig(...args),
+    resolveNotifierTarget: (
+      config: { notifiers?: Record<string, { plugin?: string }> },
+      reference: string,
+    ) => ({
+      reference,
+      pluginName: config.notifiers?.[reference]?.plugin ?? reference,
+    }),
+    buildCIFailureNotificationData: (input: {
+      sessionId: string;
+      projectId: string;
+      context?: { pr?: Record<string, unknown> | null };
+      failedChecks: Array<Record<string, unknown>>;
+    }) => ({
+      ...baseData({ ...input, semanticType: "ci.failing" }),
+      ci: { status: "failing", failedChecks: input.failedChecks },
+    }),
+    buildPRStateNotificationData: (input: {
+      eventType: string;
+      sessionId: string;
+      projectId: string;
+      context?: { pr?: Record<string, unknown> | null };
+      oldPRState: string;
+      newPRState: string;
+    }) => ({
+      ...baseData({ ...input, semanticType: input.eventType }),
+      transition: { kind: "pr_state", from: input.oldPRState, to: input.newPRState },
+    }),
+    buildReactionNotificationData: (input: {
+      eventType: string;
+      sessionId: string;
+      projectId: string;
+      context?: { pr?: Record<string, unknown> | null };
+      reactionKey: string;
+      action: string;
+    }) => ({
+      ...baseData({
+        ...input,
+        semanticType:
+          input.reactionKey === "all-complete" ? "summary.all_complete" : input.eventType,
+      }),
+      reaction: { key: input.reactionKey, action: input.action },
+    }),
+    buildSessionTransitionNotificationData: (input: {
+      eventType: string;
+      sessionId: string;
+      projectId: string;
+      context?: { pr?: Record<string, unknown> | null };
+      oldStatus: string;
+      newStatus: string;
+    }) => ({
+      ...baseData({ ...input, semanticType: input.eventType }),
+      transition: { kind: "session_status", from: input.oldStatus, to: input.newStatus },
+    }),
+  };
+});
 
 vi.mock("../../src/lib/plugin-store.js", () => ({
   importPluginModuleFromSource: vi.fn(),
@@ -135,8 +207,20 @@ describe("notify command", () => {
       type: "ci.failing",
       priority: "action",
       data: {
-        prNumber: 1579,
-        ciStatus: "failing",
+        schemaVersion: 3,
+        subject: {
+          pr: {
+            number: 1579,
+            url: "https://github.com/ComposioHQ/agent-orchestrator/pull/1579",
+          },
+        },
+        ci: {
+          status: "failing",
+          failedChecks: [
+            { name: "typecheck", status: "failed" },
+            { name: "unit-tests", status: "failed" },
+          ],
+        },
         runId: "123",
       },
     });
@@ -156,9 +240,11 @@ describe("notify command", () => {
   it("captures one sink webhook payload and closes cleanly", async () => {
     let sinkUrl = "";
 
-    mockRegistry.loadFromConfig.mockImplementation((config: { notifiers: Record<string, { url?: string }> }) => {
-      sinkUrl = config.notifiers.sink?.url ?? "";
-    });
+    mockRegistry.loadFromConfig.mockImplementation(
+      (config: { notifiers: Record<string, { url?: string }> }) => {
+        sinkUrl = config.notifiers.sink?.url ?? "";
+      },
+    );
     mockRegistry.get.mockImplementation((slot: string, name: string) => {
       if (slot !== "notifier" || name !== "sink") return null;
       return {
@@ -180,9 +266,7 @@ describe("notify command", () => {
     expect(output).toContain("Test notification from ao notify test");
     expect(processExitSpy).not.toHaveBeenCalled();
 
-    await expect(
-      fetch(sinkUrl, { method: "POST", body: "{}" }),
-    ).rejects.toThrow();
+    await expect(fetch(sinkUrl, { method: "POST", body: "{}" })).rejects.toThrow();
   });
 
   it("does not start a sink delivery in dry-run mode", async () => {

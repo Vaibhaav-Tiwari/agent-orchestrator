@@ -1,4 +1,5 @@
 import {
+  getNotificationDataV3,
   validateUrl,
   type PluginModule,
   type Notifier,
@@ -22,6 +23,18 @@ const PRIORITY_EMOJI: Record<EventPriority, string> = {
   warning: ":warning:",
   info: ":information_source:",
 };
+
+function getSubjectPRUrl(event: OrchestratorEvent): string | undefined {
+  return getNotificationDataV3(event.data)?.subject.pr?.url;
+}
+
+function getCIStatus(event: OrchestratorEvent): string | undefined {
+  return getNotificationDataV3(event.data)?.ci?.status;
+}
+
+function getFailedCheckNames(event: OrchestratorEvent): string[] {
+  return getNotificationDataV3(event.data)?.ci?.failedChecks?.map((check) => check.name) ?? [];
+}
 
 function buildBlocks(event: OrchestratorEvent, actions?: NotifyAction[]): unknown[] {
   const blocks: unknown[] = [
@@ -51,8 +64,7 @@ function buildBlocks(event: OrchestratorEvent, actions?: NotifyAction[]): unknow
     },
   ];
 
-  // Add PR link if available (type-guarded)
-  const prUrl = typeof event.data.prUrl === "string" ? event.data.prUrl : undefined;
+  const prUrl = getSubjectPRUrl(event);
   if (prUrl) {
     blocks.push({
       type: "section",
@@ -63,16 +75,17 @@ function buildBlocks(event: OrchestratorEvent, actions?: NotifyAction[]): unknow
     });
   }
 
-  // Add CI status if available (type-guarded)
-  const ciStatus = typeof event.data.ciStatus === "string" ? event.data.ciStatus : undefined;
+  const ciStatus = getCIStatus(event);
   if (ciStatus) {
     const ciEmoji = ciStatus === CI_STATUS.PASSING ? ":white_check_mark:" : ":x:";
+    const failedChecks = getFailedCheckNames(event);
+    const failedCheckText = failedChecks.length > 0 ? ` | Failed: ${failedChecks.join(", ")}` : "";
     blocks.push({
       type: "context",
       elements: [
         {
           type: "mrkdwn",
-          text: `${ciEmoji} CI: ${ciStatus}`,
+          text: `${ciEmoji} CI: ${ciStatus}${failedCheckText}`,
         },
       ],
     });

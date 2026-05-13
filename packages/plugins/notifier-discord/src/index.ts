@@ -1,4 +1,5 @@
 import {
+  getNotificationDataV3,
   validateUrl,
   type PluginModule,
   type Notifier,
@@ -32,8 +33,7 @@ const PRIORITY_EMOJI: Record<EventPriority, string> = {
   info: "\u{2139}\u{FE0F}", // info
 };
 
-const DISCORD_WEBHOOK_URL_RE =
-  /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\//;
+const DISCORD_WEBHOOK_URL_RE = /^https:\/\/(?:discord\.com|discordapp\.com)\/api\/webhooks\//;
 
 const EMBED_DESCRIPTION_MAX = 4096;
 
@@ -44,6 +44,18 @@ interface DiscordEmbed {
   fields?: { name: string; value: string; inline?: boolean }[];
   timestamp?: string;
   footer?: { text: string };
+}
+
+function getSubjectPRUrl(event: OrchestratorEvent): string | undefined {
+  return getNotificationDataV3(event.data)?.subject.pr?.url;
+}
+
+function getCIStatus(event: OrchestratorEvent): string | undefined {
+  return getNotificationDataV3(event.data)?.ci?.status;
+}
+
+function getFailedCheckNames(event: OrchestratorEvent): string[] {
+  return getNotificationDataV3(event.data)?.ci?.failedChecks?.map((check) => check.name) ?? [];
 }
 
 function buildEmbed(event: OrchestratorEvent, actions?: NotifyAction[]): DiscordEmbed {
@@ -64,17 +76,21 @@ function buildEmbed(event: OrchestratorEvent, actions?: NotifyAction[]): Discord
     footer: { text: "Agent Orchestrator" },
   };
 
-  // Add PR link if available
-  const prUrl = typeof event.data.prUrl === "string" ? event.data.prUrl : undefined;
+  const prUrl = getSubjectPRUrl(event);
   if (prUrl) {
     embed.fields!.push({ name: "Pull Request", value: `[View PR](${prUrl})`, inline: false });
   }
 
-  // Add CI status if available
-  const ciStatus = typeof event.data.ciStatus === "string" ? event.data.ciStatus : undefined;
+  const ciStatus = getCIStatus(event);
   if (ciStatus) {
     const ciEmoji = ciStatus === CI_STATUS.PASSING ? "\u{2705}" : "\u{274C}";
-    embed.fields!.push({ name: "CI", value: `${ciEmoji} ${ciStatus}`, inline: true });
+    const failedChecks = getFailedCheckNames(event);
+    const failedCheckText = failedChecks.length > 0 ? `\nFailed: ${failedChecks.join(", ")}` : "";
+    embed.fields!.push({
+      name: "CI",
+      value: `${ciEmoji} ${ciStatus}${failedCheckText}`,
+      inline: true,
+    });
   }
 
   // Add actions as a field
@@ -129,7 +145,9 @@ async function postWithRetry(
         // Rate-limit budget exhausted — fail immediately rather than falling through
         // to the error retry path (which would compound the two counters).
         const body = await response.text().catch(() => "");
-        lastError = new Error(`Discord webhook rate-limited (HTTP 429)${body ? `: ${body.trim()}` : ""}`);
+        lastError = new Error(
+          `Discord webhook rate-limited (HTTP 429)${body ? `: ${body.trim()}` : ""}`,
+        );
         throw lastError;
       }
 
@@ -166,23 +184,24 @@ export function create(config?: Record<string, unknown>): Notifier {
   if (!webhookUrl) {
     console.warn(
       "[notifier-discord] No webhookUrl configured.\n" +
-      "  Set it in agent-orchestrator.yaml under notifiers.discord.webhookUrl\n" +
-      "  Create a webhook: Discord Server Settings > Integrations > Webhooks > New Webhook",
+        "  Set it in agent-orchestrator.yaml under notifiers.discord.webhookUrl\n" +
+        "  Create a webhook: Discord Server Settings > Integrations > Webhooks > New Webhook",
     );
   } else {
     validateUrl(webhookUrl, "notifier-discord");
     if (!DISCORD_WEBHOOK_URL_RE.test(webhookUrl)) {
       console.warn(
         "[notifier-discord] webhookUrl does not match expected Discord webhook format.\n" +
-        "  Expected: https://discord.com/api/webhooks/... or https://discordapp.com/api/webhooks/...",
+          "  Expected: https://discord.com/api/webhooks/... or https://discordapp.com/api/webhooks/...",
       );
     }
   }
 
   // Discord requires thread_id as a URL query param, not in the JSON body
-  const effectiveUrl = webhookUrl && threadId
-    ? `${webhookUrl}${webhookUrl.includes("?") ? "&" : "?"}thread_id=${encodeURIComponent(threadId)}`
-    : webhookUrl;
+  const effectiveUrl =
+    webhookUrl && threadId
+      ? `${webhookUrl}${webhookUrl.includes("?") ? "&" : "?"}thread_id=${encodeURIComponent(threadId)}`
+      : webhookUrl;
 
   function buildPayload(embeds: DiscordEmbed[]): Record<string, unknown> {
     const payload: Record<string, unknown> = { username, embeds };

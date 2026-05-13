@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildSessionTransitionNotificationData,
   getDashboardNotificationStorePath,
   readDashboardNotifications,
   type OrchestratorEvent,
@@ -25,7 +26,29 @@ function makeEvent(overrides: Partial<OrchestratorEvent> = {}): OrchestratorEven
     projectId: "demo",
     timestamp: new Date("2026-05-13T12:00:00.000Z"),
     message: "Agent needs input",
-    data: { prUrl: "https://github.com/acme/app/pull/1" },
+    data: buildSessionTransitionNotificationData({
+      eventType: "session.needs_input",
+      sessionId: "worker-1",
+      projectId: "demo",
+      context: {
+        pr: {
+          number: 1,
+          url: "https://github.com/acme/app/pull/1",
+          title: "Demo PR",
+          branch: "demo/pr",
+          baseBranch: "main",
+          owner: "acme",
+          repo: "app",
+          isDraft: false,
+        },
+        issueId: null,
+        issueTitle: null,
+        summary: "Demo session",
+        branch: "demo/pr",
+      },
+      oldStatus: "working",
+      newStatus: "needs_input",
+    }),
     ...overrides,
   };
 }
@@ -51,7 +74,10 @@ describe("notifier-dashboard", () => {
     const records = readDashboardNotifications(configPath);
     expect(records).toHaveLength(1);
     expect(records[0].event.sessionId).toBe("worker-1");
-    expect(records[0].event.data.prUrl).toBe("https://github.com/acme/app/pull/1");
+    expect(records[0].event.data).toMatchObject({
+      schemaVersion: 3,
+      subject: { pr: { url: "https://github.com/acme/app/pull/1" } },
+    });
   });
 
   it("persists actions with notifications", async () => {

@@ -23,6 +23,17 @@ vi.mock("next/link", () => ({
 
 import { DashboardNotificationButton } from "../DashboardNotificationButton";
 
+function makeV3Data(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 3,
+    subject: {
+      session: { id: "worker-1", projectId: "demo" },
+      pr: { number: 1, url: "https://github.com/acme/app/pull/1" },
+    },
+    ...overrides,
+  };
+}
+
 function makeNotification(id: string, message: string): DashboardNotificationRecord {
   return {
     id: `${id}:2026-05-13T12:00:00.000Z`,
@@ -35,7 +46,7 @@ function makeNotification(id: string, message: string): DashboardNotificationRec
       projectId: "demo",
       timestamp: "2026-05-13T12:00:00.000Z",
       message,
-      data: { prUrl: "https://github.com/acme/app/pull/1" },
+      data: makeV3Data(),
     },
   };
 }
@@ -67,6 +78,10 @@ function makeSuccessNotification(
       type,
       priority: type === "summary.all_complete" ? "info" : "action",
       message,
+      data:
+        type === "summary.all_complete"
+          ? makeV3Data({ semanticType: "summary.all_complete" })
+          : makeV3Data({ semanticType: "merge.ready", merge: { ready: true } }),
     },
   };
 }

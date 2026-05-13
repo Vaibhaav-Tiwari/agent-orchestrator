@@ -1,3 +1,4 @@
+import { getNotificationDataV3 } from "@aoagents/ao-core";
 import type {
   PluginModule,
   Notifier,
@@ -20,6 +21,18 @@ const PRIORITY_EMOJI: Record<EventPriority, string> = {
   warning: "\u{26A0}\u{FE0F}",
   info: "\u{2139}\u{FE0F}",
 };
+
+function getSubjectPRUrl(event: OrchestratorEvent): string | undefined {
+  return getNotificationDataV3(event.data)?.subject.pr?.url;
+}
+
+function getCIStatus(event: OrchestratorEvent): string | undefined {
+  return getNotificationDataV3(event.data)?.ci?.status;
+}
+
+function getFailedCheckNames(event: OrchestratorEvent): string[] {
+  return getNotificationDataV3(event.data)?.ci?.failedChecks?.map((check) => check.name) ?? [];
+}
 
 type ComposioApp = "slack" | "discord" | "gmail";
 type DiscordMode = "webhook" | "bot";
@@ -177,9 +190,16 @@ function formatNotifyText(event: OrchestratorEvent): string {
   const emoji = PRIORITY_EMOJI[event.priority];
   const parts = [`${emoji} *${event.type}* — ${event.sessionId}`, event.message];
 
-  const prUrl = typeof event.data.prUrl === "string" ? event.data.prUrl : undefined;
+  const prUrl = getSubjectPRUrl(event);
   if (prUrl) {
     parts.push(`PR: ${prUrl}`);
+  }
+
+  const ciStatus = getCIStatus(event);
+  if (ciStatus) {
+    const failedChecks = getFailedCheckNames(event);
+    const failedCheckText = failedChecks.length > 0 ? ` (failed: ${failedChecks.join(", ")})` : "";
+    parts.push(`CI: ${ciStatus}${failedCheckText}`);
   }
 
   return parts.join("\n");

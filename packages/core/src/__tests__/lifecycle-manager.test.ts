@@ -1731,7 +1731,11 @@ describe("check (single session)", () => {
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "reaction.triggered",
-        data: expect.objectContaining({ reactionKey: "pr-closed" }),
+        data: expect.objectContaining({
+          schemaVersion: 3,
+          semanticType: "pr.closed",
+          reaction: expect.objectContaining({ key: "pr-closed" }),
+        }),
       }),
     );
   });
@@ -1828,10 +1832,11 @@ describe("reactions", () => {
 
       const reactionNotifications = vi.mocked(notifier.notify).mock.calls.filter((call) => {
         const event = call[0] as { type?: string; data?: Record<string, unknown> } | undefined;
-        return (
-          event?.type === "reaction.triggered" &&
-          event.data?.["reactionKey"] === "report-no-acknowledge"
-        );
+        const reaction =
+          event?.data?.reaction && typeof event.data.reaction === "object"
+            ? (event.data.reaction as Record<string, unknown>)
+            : null;
+        return event?.type === "reaction.triggered" && reaction?.key === "report-no-acknowledge";
       });
 
       expect(reactionNotifications).toHaveLength(1);
@@ -3245,22 +3250,34 @@ describe("reactions", () => {
     // Reach escalated state: attempt 1 → send, attempt 2 → escalate
     await lm.check("app-1"); // pr_open → ci_failed: attempt 1, send
     vi.mocked(mockSessionManager.send).mockClear();
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "passing" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "passing" }),
+    );
     await lm.check("app-1"); // ci_failed → pr_open
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "failing" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "failing" }),
+    );
     await lm.check("app-1"); // pr_open → ci_failed: attempt 2 → escalate
-    expect(notifier.notify).toHaveBeenCalledWith(expect.objectContaining({ type: "reaction.escalated" }));
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "reaction.escalated" }),
+    );
     vi.mocked(notifier.notify).mockClear();
 
     // ONE passing poll (stableCount = 1, not enough)
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "passing" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "passing" }),
+    );
     await lm.check("app-1");
 
     // Next CI failure: tracker still escalated → short-circuit
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "failing" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "failing" }),
+    );
     await lm.check("app-1");
     expect(mockSessionManager.send).not.toHaveBeenCalled();
-    expect(notifier.notify).not.toHaveBeenCalledWith(expect.objectContaining({ type: "reaction.escalated" }));
+    expect(notifier.notify).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "reaction.escalated" }),
+    );
   });
 
   it("pending CI does not count toward ci-failed tracker resolution", async () => {
@@ -3302,12 +3319,16 @@ describe("reactions", () => {
     vi.mocked(mockSessionManager.send).mockClear();
 
     // CI goes pending (agent pushed a fix, new run started): ci_failed → pr_open
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "pending" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "pending" }),
+    );
     await lm.check("app-1"); // stableCount must NOT increment
     await lm.check("app-1"); // two pending polls — must NOT clear tracker
 
     // CI fails again (run completed failing): pr_open → ci_failed, attempt 2 — send
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "failing" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "failing" }),
+    );
     await lm.check("app-1");
     // If pending had wrongly cleared the tracker, this would be attempt 1 (fresh), not attempt 2.
     // Attempt 2 ≤ retries:2 → sends to agent (not escalates)
@@ -3315,10 +3336,14 @@ describe("reactions", () => {
     vi.mocked(mockSessionManager.send).mockClear();
 
     // CI goes pending again, then failing — attempt 3 > retries:2 → escalate
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "pending" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "pending" }),
+    );
     await lm.check("app-1"); // pending: no clear
     await lm.check("app-1"); // pending: no clear
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "failing" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "failing" }),
+    );
     await lm.check("app-1");
     expect(mockSessionManager.send).not.toHaveBeenCalled(); // escalated, not sent to agent
   });
@@ -3362,25 +3387,35 @@ describe("reactions", () => {
     // Reach escalated state: attempt 1 → send, attempt 2 → escalate
     await lm.check("app-1"); // attempt 1, send
     vi.mocked(mockSessionManager.send).mockClear();
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "passing" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "passing" }),
+    );
     await lm.check("app-1"); // ci_failed → pr_open
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "failing" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "failing" }),
+    );
     await lm.check("app-1"); // attempt 2 → escalate
     vi.mocked(notifier.notify).mockClear();
 
     // CI goes pending (new run) — stableCount stays 0, does NOT progress toward resolution
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "pending" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "pending" }),
+    );
     await lm.check("app-1");
     await lm.check("app-1");
     await lm.check("app-1"); // many pending polls — stableCount never reaches threshold
 
     // CI finally passes (2 stable polls) → tracker cleared
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "passing" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "passing" }),
+    );
     await lm.check("app-1"); // stableCount = 1
     await lm.check("app-1"); // stableCount = 2 → clearReactionTracker
 
     // Next CI failure gets fresh budget: attempt 1, send
-    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(mockBatchEnrichment({ ciStatus: "failing" }));
+    vi.mocked(mockSCM.enrichSessionsPRBatch!).mockImplementation(
+      mockBatchEnrichment({ ciStatus: "failing" }),
+    );
     await lm.check("app-1");
     expect(mockSessionManager.send).toHaveBeenCalledTimes(1);
     expect(notifier.notify).not.toHaveBeenCalledWith(
@@ -3533,7 +3568,11 @@ describe("pollAll terminal status accounting", () => {
       .mock.calls.filter((call: unknown[]) => {
         const event = call[0] as Record<string, unknown> | undefined;
         const data = event?.data as Record<string, unknown> | undefined;
-        return event?.type === "reaction.triggered" && data?.reactionKey === "all-complete";
+        const reaction =
+          data?.reaction && typeof data.reaction === "object"
+            ? (data.reaction as Record<string, unknown>)
+            : null;
+        return event?.type === "reaction.triggered" && reaction?.key === "all-complete";
       });
     expect(allCompleteNotifications).toHaveLength(0);
 
@@ -4111,14 +4150,19 @@ describe("event enrichment", () => {
       expect.objectContaining({
         type: "pr.closed",
         data: expect.objectContaining({
-          context: expect.objectContaining({
+          schemaVersion: 3,
+          subject: expect.objectContaining({
             pr: expect.objectContaining({
               url: "https://github.com/org/repo/pull/42",
               number: 42,
             }),
             branch: "feat/test-123",
           }),
-          schemaVersion: 2,
+          transition: expect.objectContaining({
+            kind: "pr_state",
+            from: "none",
+            to: "closed",
+          }),
         }),
       }),
     );
@@ -4158,11 +4202,13 @@ describe("event enrichment", () => {
       expect.objectContaining({
         type: "pr.closed",
         data: expect.objectContaining({
-          context: expect.objectContaining({
-            issueId: "INT-123",
-            issueTitle: "Fix login bug",
+          schemaVersion: 3,
+          subject: expect.objectContaining({
+            issue: {
+              id: "INT-123",
+              title: "Fix login bug",
+            },
           }),
-          schemaVersion: 2,
         }),
       }),
     );
@@ -4206,11 +4252,15 @@ describe("event enrichment", () => {
       expect.objectContaining({
         type: "session.needs_input",
         data: expect.objectContaining({
-          context: expect.objectContaining({
-            pr: null,
-            issueId: "INT-456",
+          schemaVersion: 3,
+          subject: expect.objectContaining({
+            issue: { id: "INT-456" },
           }),
-          schemaVersion: 2,
+          transition: expect.objectContaining({
+            kind: "session_status",
+            from: "working",
+            to: "needs_input",
+          }),
         }),
       }),
     );

@@ -1,28 +1,15 @@
+import type {
+  DashboardNotificationRecord,
+  SerializedDashboardAction as DashboardNotificationAction,
+  SerializedDashboardEvent as DashboardNotificationEvent,
+} from "@aoagents/ao-core";
 import type { AttentionLevel } from "./types";
 
-export interface DashboardNotificationEvent {
-  id: string;
-  type: string;
-  priority: string;
-  sessionId: string;
-  projectId: string;
-  timestamp: string;
-  message: string;
-  data: Record<string, unknown>;
-}
-
-export interface DashboardNotificationAction {
-  label: string;
-  url?: string;
-  callbackEndpoint?: string;
-}
-
-export interface DashboardNotificationRecord {
-  id: string;
-  receivedAt: string;
-  event: DashboardNotificationEvent;
-  actions?: DashboardNotificationAction[];
-}
+export type {
+  DashboardNotificationAction,
+  DashboardNotificationEvent,
+  DashboardNotificationRecord,
+};
 
 // ── Client → Server ──
 

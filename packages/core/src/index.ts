@@ -212,6 +212,39 @@ export {
 } from "./observability.js";
 export { execGhObserved, getGhTraceFilePath } from "./gh-trace.js";
 export { resolveNotifierTarget } from "./notifier-resolution.js";
+export {
+  NOTIFICATION_DATA_SCHEMA_VERSION,
+  buildCIFailureNotificationData,
+  buildNotificationSubject,
+  buildPRStateNotificationData,
+  buildReactionEscalationNotificationData,
+  buildReactionNotificationData,
+  buildSessionTransitionNotificationData,
+  getNotificationDataV3,
+  semanticTypeForReactionKey,
+} from "./notification-data.js";
+export type {
+  CIFailureNotificationInput,
+  NotificationCI,
+  NotificationCICheck,
+  NotificationDataBaseInput,
+  NotificationDataV3,
+  NotificationEscalation,
+  NotificationEventContext,
+  NotificationIssueSubject,
+  NotificationMerge,
+  NotificationPRContext,
+  NotificationPRSubject,
+  NotificationReaction,
+  NotificationReview,
+  NotificationSessionSubject,
+  NotificationSubject,
+  NotificationTransition,
+  PRStateNotificationInput,
+  ReactionEscalationNotificationInput,
+  ReactionNotificationInput,
+  SessionTransitionNotificationInput,
+} from "./notification-data.js";
 export type {
   ObservabilityLevel,
   ObservabilityMetricName,
@@ -282,7 +315,9 @@ export {
   readDashboardNotifications,
   readDashboardNotificationsFromFile,
   writeDashboardNotificationsToFile,
+  type DashboardNotificationEventData,
   type DashboardNotificationRecord,
+  type LegacyDashboardNotificationData,
   type SerializedDashboardAction,
   type SerializedDashboardEvent,
 } from "./dashboard-notifications.js";

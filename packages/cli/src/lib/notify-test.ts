@@ -1,9 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
+  buildCIFailureNotificationData,
+  buildPRStateNotificationData,
+  buildReactionNotificationData,
+  buildSessionTransitionNotificationData,
   resolveNotifierTarget,
+  type CICheck,
   type EventPriority,
   type EventType,
+  type NotificationDataV3,
+  type NotificationEventContext,
   type Notifier,
   type NotifyAction,
   type OrchestratorConfig,
@@ -67,8 +74,50 @@ interface NotifyTemplate {
   sessionId: string;
   projectId: string;
   message: string;
-  data: Record<string, unknown>;
+  data: NotificationDataV3;
 }
+
+const DEMO_PR_URL = "https://github.com/ComposioHQ/agent-orchestrator/pull/1579";
+
+const DEMO_PR_CONTEXT: NotificationEventContext = {
+  pr: {
+    number: 1579,
+    url: DEMO_PR_URL,
+    title: "Normalize AO notifier payloads",
+    branch: "ao/demo-notifier-harness",
+    baseBranch: "main",
+    owner: "ComposioHQ",
+    repo: "agent-orchestrator",
+    isDraft: false,
+  },
+  issueId: "AO-1579",
+  issueTitle: "Make AO notification payloads API-grade",
+  summary: "Normalize AO notifier payloads",
+  branch: "ao/demo-notifier-harness",
+};
+
+const DEMO_SYSTEM_CONTEXT: NotificationEventContext = {
+  pr: null,
+  issueId: null,
+  issueTitle: null,
+  summary: "AO notification delivery smoke test",
+  branch: null,
+};
+
+const DEMO_FAILED_CHECKS: CICheck[] = [
+  {
+    name: "typecheck",
+    status: "failed",
+    conclusion: "FAILURE",
+    url: `${DEMO_PR_URL}/checks?check_run_id=101`,
+  },
+  {
+    name: "unit-tests",
+    status: "failed",
+    conclusion: "FAILURE",
+    url: `${DEMO_PR_URL}/checks?check_run_id=102`,
+  },
+];
 
 const DEMO_TEMPLATES: Record<NotifyTestTemplateName, NotifyTemplate> = {
   basic: {
@@ -77,11 +126,14 @@ const DEMO_TEMPLATES: Record<NotifyTestTemplateName, NotifyTemplate> = {
     sessionId: "notify-demo",
     projectId: "demo",
     message: "Test notification from ao notify test",
-    data: {
-      source: "ao-notify-test",
-      template: "basic",
-      completedSessions: 1,
-    },
+    data: buildReactionNotificationData({
+      eventType: "reaction.triggered",
+      sessionId: "notify-demo",
+      projectId: "demo",
+      context: DEMO_SYSTEM_CONTEXT,
+      reactionKey: "all-complete",
+      action: "notify",
+    }),
   },
   "agent-stuck": {
     type: "session.stuck",
@@ -89,14 +141,14 @@ const DEMO_TEMPLATES: Record<NotifyTestTemplateName, NotifyTemplate> = {
     sessionId: "demo-agent-7",
     projectId: "demo",
     message: "Agent demo-agent-7 appears stuck after repeated inactivity probes",
-    data: {
-      source: "ao-notify-test",
-      template: "agent-stuck",
-      sessionStatus: "stuck",
-      activityState: "blocked",
-      idleMinutes: 37,
-      lastOutput: "Retry loop detected while applying the patch",
-    },
+    data: buildSessionTransitionNotificationData({
+      eventType: "session.stuck",
+      sessionId: "demo-agent-7",
+      projectId: "demo",
+      context: DEMO_PR_CONTEXT,
+      oldStatus: "working",
+      newStatus: "stuck",
+    }),
   },
   "agent-needs-input": {
     type: "session.needs_input",
@@ -104,27 +156,29 @@ const DEMO_TEMPLATES: Record<NotifyTestTemplateName, NotifyTemplate> = {
     sessionId: "demo-agent-12",
     projectId: "demo",
     message: "Agent demo-agent-12 needs input before it can continue",
-    data: {
-      source: "ao-notify-test",
-      template: "agent-needs-input",
-      sessionStatus: "needs_input",
-      prompt: "Approve running the migration test suite?",
-      requestedAction: "human_input",
-    },
+    data: buildSessionTransitionNotificationData({
+      eventType: "session.needs_input",
+      sessionId: "demo-agent-12",
+      projectId: "demo",
+      context: DEMO_PR_CONTEXT,
+      oldStatus: "working",
+      newStatus: "needs_input",
+    }),
   },
   "agent-exited": {
-    type: "session.exited",
+    type: "session.killed",
     priority: "urgent",
     sessionId: "demo-agent-4",
     projectId: "demo",
     message: "Agent demo-agent-4 exited before completing its task",
-    data: {
-      source: "ao-notify-test",
-      template: "agent-exited",
-      sessionStatus: "terminated",
-      runtimeState: "exited",
-      exitCode: 1,
-    },
+    data: buildSessionTransitionNotificationData({
+      eventType: "session.killed",
+      sessionId: "demo-agent-4",
+      projectId: "demo",
+      context: DEMO_PR_CONTEXT,
+      oldStatus: "working",
+      newStatus: "killed",
+    }),
   },
   "ci-failing": {
     type: "ci.failing",
@@ -132,16 +186,12 @@ const DEMO_TEMPLATES: Record<NotifyTestTemplateName, NotifyTemplate> = {
     sessionId: "demo-agent-19",
     projectId: "demo",
     message: "CI is failing on PR #1579",
-    data: {
-      source: "ao-notify-test",
-      template: "ci-failing",
-      prNumber: 1579,
-      prUrl: "https://github.com/ComposioHQ/agent-orchestrator/pull/1579",
-      branch: "ao/demo-notifier-harness",
-      ciStatus: "failing",
-      failedChecks: ["typecheck", "unit-tests"],
-      commitSha: "abc1234",
-    },
+    data: buildCIFailureNotificationData({
+      sessionId: "demo-agent-19",
+      projectId: "demo",
+      context: DEMO_PR_CONTEXT,
+      failedChecks: DEMO_FAILED_CHECKS,
+    }),
   },
   "review-changes-requested": {
     type: "review.changes_requested",
@@ -149,31 +199,47 @@ const DEMO_TEMPLATES: Record<NotifyTestTemplateName, NotifyTemplate> = {
     sessionId: "demo-agent-21",
     projectId: "demo",
     message: "Review changes were requested on PR #1579",
-    data: {
-      source: "ao-notify-test",
-      template: "review-changes-requested",
-      prNumber: 1579,
-      prUrl: "https://github.com/ComposioHQ/agent-orchestrator/pull/1579",
-      reviewUrl: "https://github.com/ComposioHQ/agent-orchestrator/pull/1579#pullrequestreview-1",
-      reviewers: ["octocat"],
-      unresolvedComments: 3,
-    },
+    data: (() => {
+      const data = buildSessionTransitionNotificationData({
+        eventType: "review.changes_requested",
+        sessionId: "demo-agent-21",
+        projectId: "demo",
+        context: DEMO_PR_CONTEXT,
+        oldStatus: "review_pending",
+        newStatus: "changes_requested",
+      });
+      data.review = {
+        ...(data.review ?? {}),
+        decision: "changes_requested",
+        unresolvedThreads: 3,
+        url: `${DEMO_PR_URL}#pullrequestreview-1`,
+      };
+      return data;
+    })(),
   },
   "approved-and-green": {
-    type: "review.approved",
+    type: "reaction.triggered",
     priority: "info",
     sessionId: "demo-agent-23",
     projectId: "demo",
     message: "PR #1579 is approved and CI is green",
-    data: {
-      source: "ao-notify-test",
-      template: "approved-and-green",
-      prNumber: 1579,
-      prUrl: "https://github.com/ComposioHQ/agent-orchestrator/pull/1579",
-      ciStatus: "passing",
-      reviewState: "approved",
-      approvals: 2,
-    },
+    data: buildReactionNotificationData({
+      eventType: "reaction.triggered",
+      sessionId: "demo-agent-23",
+      projectId: "demo",
+      context: DEMO_PR_CONTEXT,
+      reactionKey: "approved-and-green",
+      action: "notify",
+      enrichment: {
+        state: "open",
+        ciStatus: "passing",
+        reviewDecision: "approved",
+        mergeable: true,
+        title: "Normalize AO notifier payloads",
+        hasConflicts: false,
+        isBehind: false,
+      },
+    }),
   },
   "merge-ready": {
     type: "merge.ready",
@@ -181,15 +247,23 @@ const DEMO_TEMPLATES: Record<NotifyTestTemplateName, NotifyTemplate> = {
     sessionId: "demo-agent-29",
     projectId: "demo",
     message: "PR #1579 is ready to merge",
-    data: {
-      source: "ao-notify-test",
-      template: "merge-ready",
-      prNumber: 1579,
-      prUrl: "https://github.com/ComposioHQ/agent-orchestrator/pull/1579",
-      ciStatus: "passing",
-      reviewState: "approved",
-      mergeable: true,
-    },
+    data: buildSessionTransitionNotificationData({
+      eventType: "merge.ready",
+      sessionId: "demo-agent-29",
+      projectId: "demo",
+      context: DEMO_PR_CONTEXT,
+      oldStatus: "approved",
+      newStatus: "mergeable",
+      enrichment: {
+        state: "open",
+        ciStatus: "passing",
+        reviewDecision: "approved",
+        mergeable: true,
+        title: "Normalize AO notifier payloads",
+        hasConflicts: false,
+        isBehind: false,
+      },
+    }),
   },
   "all-complete": {
     type: "summary.all_complete",
@@ -197,13 +271,14 @@ const DEMO_TEMPLATES: Record<NotifyTestTemplateName, NotifyTemplate> = {
     sessionId: "demo-orchestrator",
     projectId: "demo",
     message: "All demo sessions completed successfully",
-    data: {
-      source: "ao-notify-test",
-      template: "all-complete",
-      completedSessions: 4,
-      failedSessions: 0,
-      mergedPullRequests: 2,
-    },
+    data: buildReactionNotificationData({
+      eventType: "reaction.triggered",
+      sessionId: "demo-orchestrator",
+      projectId: "demo",
+      context: DEMO_SYSTEM_CONTEXT,
+      reactionKey: "all-complete",
+      action: "notify",
+    }),
   },
   "pr-closed": {
     type: "pr.closed",
@@ -211,14 +286,14 @@ const DEMO_TEMPLATES: Record<NotifyTestTemplateName, NotifyTemplate> = {
     sessionId: "demo-agent-31",
     projectId: "demo",
     message: "PR #1579 was closed without merge",
-    data: {
-      source: "ao-notify-test",
-      template: "pr-closed",
-      prNumber: 1579,
-      prUrl: "https://github.com/ComposioHQ/agent-orchestrator/pull/1579",
-      prState: "closed",
-      merged: false,
-    },
+    data: buildPRStateNotificationData({
+      eventType: "pr.closed",
+      sessionId: "demo-agent-31",
+      projectId: "demo",
+      context: DEMO_PR_CONTEXT,
+      oldPRState: "open",
+      newPRState: "closed",
+    }),
   },
 };
 
@@ -319,6 +394,26 @@ function isTemplateName(value: string): value is NotifyTestTemplateName {
   return NOTIFY_TEST_TEMPLATE_NAMES.includes(value as NotifyTestTemplateName);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function syncNotificationSubject(
+  data: Record<string, unknown>,
+  sessionId: string,
+  projectId: string,
+): Record<string, unknown> {
+  if (data.schemaVersion !== 3 || !isRecord(data.subject)) return data;
+
+  return {
+    ...data,
+    subject: {
+      ...data.subject,
+      session: { id: sessionId, projectId },
+    },
+  };
+}
+
 function assertPriority(priority: string, source: string): EventPriority {
   if ((VALID_PRIORITIES as readonly string[]).includes(priority)) {
     return priority as EventPriority;
@@ -380,6 +475,16 @@ export function createNotifyTestEvent(request: NotifyTestRequest = {}): {
     ? assertPriority(request.priority, "priority")
     : template.priority;
   const type = request.type ? assertEventType(request.type) : template.type;
+  const sessionId = request.sessionId ?? template.sessionId;
+  const projectId = request.projectId ?? template.projectId;
+  const data = syncNotificationSubject(
+    {
+      ...template.data,
+      ...(request.data ?? {}),
+    },
+    sessionId,
+    projectId,
+  );
 
   return {
     templateName,
@@ -387,14 +492,11 @@ export function createNotifyTestEvent(request: NotifyTestRequest = {}): {
       id: `notify-test-${Date.now()}`,
       type,
       priority,
-      sessionId: request.sessionId ?? template.sessionId,
-      projectId: request.projectId ?? template.projectId,
+      sessionId,
+      projectId,
       timestamp: new Date(),
       message: request.message ?? template.message,
-      data: {
-        ...template.data,
-        ...(request.data ?? {}),
-      },
+      data,
     },
   };
 }
@@ -441,7 +543,9 @@ export async function runNotifyTest(
   const deliveries: NotifyDeliveryResult[] = [];
 
   if (targets.length === 0) {
-    errors.push("No notifier targets resolved. Configure notifiers or pass --to, --all, or --sink.");
+    errors.push(
+      "No notifier targets resolved. Configure notifiers or pass --to, --all, or --sink.",
+    );
     return {
       ok: false,
       dryRun: Boolean(request.dryRun),
@@ -534,7 +638,9 @@ export async function runNotifyTest(
   };
 }
 
-export function parseNotifyDataJson(input: string | undefined): Record<string, unknown> | undefined {
+export function parseNotifyDataJson(
+  input: string | undefined,
+): Record<string, unknown> | undefined {
   if (!input) return undefined;
 
   let parsed: unknown;
