@@ -707,6 +707,34 @@ describe("scm-github plugin", () => {
 
       await expect(scm.getCIFailureSummary?.(pr, checks)).resolves.toBeNull();
     });
+
+    it("falls back to job logs API when gh run view cannot read logs yet", async () => {
+      const checks = [
+        {
+          name: "lint",
+          status: "failed" as const,
+          conclusion: "FAILURE",
+          url: "https://github.com/acme/repo/actions/runs/123/job/456",
+        },
+      ];
+      mockGhError("run 123 is still in progress; logs will be available when it is complete");
+      mockGhRaw("2026-05-14T23:40:42Z ##[error]Lint failed\nunused variable");
+
+      const summary = await scm.getCIFailureSummary?.(pr, checks);
+
+      expect(summary?.failedJobs).toEqual([
+        {
+          name: "lint",
+          runUrl: "https://github.com/acme/repo/actions/runs/123/job/456",
+          logTail: "2026-05-14T23:40:42Z ##[error]Lint failed\nunused variable",
+        },
+      ]);
+      expect(ghMock).toHaveBeenLastCalledWith(
+        expect.stringMatching(/(?:^|[\\/])gh(?:\.(?:exe|cmd|bat))?$/i),
+        ["api", "repos/acme/repo/actions/jobs/456/logs"],
+        expect.any(Object),
+      );
+    });
   });
 
   // ---- getCISummary ------------------------------------------------------

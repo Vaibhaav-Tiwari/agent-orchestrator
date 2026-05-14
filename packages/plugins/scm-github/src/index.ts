@@ -221,6 +221,29 @@ function extractFailedStep(log: string): string | undefined {
   return lastStep;
 }
 
+async function getFailedJobLog(
+  pr: PRInfo,
+  runReference: { runId: string; jobId?: string },
+): Promise<string> {
+  try {
+    return await gh([
+      "run",
+      "view",
+      runReference.runId,
+      "--repo",
+      repoFlag(pr),
+      "--log-failed",
+      ...(runReference.jobId ? ["--job", runReference.jobId] : []),
+    ]);
+  } catch (err) {
+    if (!runReference.jobId) throw err;
+    return gh([
+      "api",
+      `repos/${pr.owner}/${pr.repo}/actions/jobs/${runReference.jobId}/logs`,
+    ]);
+  }
+}
+
 async function getCIChecksFromStatusRollup(pr: PRInfo): Promise<CICheck[]> {
   const raw = await gh([
     "pr",
@@ -886,15 +909,7 @@ function createGitHubSCM(): SCM {
           if (seenRuns.has(seenKey)) continue;
           seenRuns.add(seenKey);
 
-          const log = await gh([
-            "run",
-            "view",
-            runReference.runId,
-            "--repo",
-            repoFlag(pr),
-            "--log-failed",
-            ...(runReference.jobId ? ["--job", runReference.jobId] : []),
-          ]);
+          const log = await getFailedJobLog(pr, runReference);
 
           const failedJob: CIFailureSummary["failedJobs"][number] = {
             name: check.name,
