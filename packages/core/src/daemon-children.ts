@@ -149,13 +149,24 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+async function waitForProcessesExit(pids: number[], timeoutMs: number): Promise<Set<number>> {
+  const alive = new Set(pids.filter(isProcessAlive));
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isProcessAlive(pid)) return true;
-    await sleep(50);
+
+  while (alive.size > 0 && Date.now() < deadline) {
+    for (const pid of alive) {
+      if (!isProcessAlive(pid)) alive.delete(pid);
+    }
+    if (alive.size > 0) {
+      await sleep(Math.min(50, Math.max(0, deadline - Date.now())));
+    }
   }
-  return !isProcessAlive(pid);
+
+  for (const pid of alive) {
+    if (!isProcessAlive(pid)) alive.delete(pid);
+  }
+
+  return alive;
 }
 
 export function registerDaemonChild(entry: Omit<DaemonChildEntry, "startedAt">): void {
@@ -219,6 +230,7 @@ const reapedChildren = new WeakSet<ChildProcess>();
 const managedChildren = new Map<number, ChildProcess>();
 let managedSignalHandlersInstalled = false;
 let daemonShutdownHandlerInstalled = false;
+let fallbackShutdownStarted = false;
 
 /**
  * Tell the managed child reaper that this process owns an application-level
@@ -230,15 +242,40 @@ export function markDaemonShutdownHandlerInstalled(): void {
   daemonShutdownHandlerInstalled = true;
 }
 
-function terminateManagedChildren(): void {
+function getManagedChildPids(): number[] {
+  return [...managedChildren.keys()];
+}
+
+function getSignalExitCode(signal: NodeJS.Signals): number {
+  if (signal === "SIGINT") return 130;
+  if (signal === "SIGTERM") return 143;
+  return 1;
+}
+
+function terminateManagedChildren(signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
   for (const [pid, child] of managedChildren) {
-    void killProcessTree(pid, "SIGTERM");
+    void killProcessTree(pid, signal);
     try {
-      child.kill("SIGTERM");
+      child.kill(signal);
     } catch {
       // Already gone.
     }
   }
+}
+
+async function exitAfterManagedChildren(signal: NodeJS.Signals): Promise<void> {
+  const exitCode = getSignalExitCode(signal);
+  const pids = getManagedChildPids();
+
+  terminateManagedChildren("SIGTERM");
+
+  const stillAlive = await waitForProcessesExit(pids, DEFAULT_GRACE_MS);
+  if (stillAlive.size > 0) {
+    terminateManagedChildren("SIGKILL");
+    await waitForProcessesExit([...stillAlive], 1_000);
+  }
+
+  process.exit(exitCode);
 }
 
 function installManagedSignalHandlers(): void {
@@ -250,16 +287,17 @@ function installManagedSignalHandlers(): void {
 
     // Installing a signal listener disables Node's default "exit on signal"
     // behaviour. If no application-level shutdown handler is present, preserve
-    // that default after forwarding the signal to managed children.
-    if (!daemonShutdownHandlerInstalled) {
-      const exitCode = signal === "SIGINT" ? 130 : 0;
-      setTimeout(() => process.exit(exitCode), 50);
+    // that default after giving managed children the same graceful
+    // SIGTERM→wait→SIGKILL lifecycle used by `ao stop`.
+    if (!daemonShutdownHandlerInstalled && !fallbackShutdownStarted) {
+      fallbackShutdownStarted = true;
+      void exitAfterManagedChildren(signal);
     }
   };
 
   process.on("SIGINT", forward);
   process.on("SIGTERM", forward);
-  process.on("exit", terminateManagedChildren);
+  process.on("exit", () => terminateManagedChildren());
 }
 
 /**
@@ -319,19 +357,17 @@ export async function sweepDaemonChildren(
     await killProcessTree(entry.pid, "SIGTERM");
   }
 
-  for (const entry of entries) {
-    if (await waitForProcessExit(entry.pid, graceMs)) {
-      result.terminated++;
-      continue;
-    }
+  const pids = entries.map((entry) => entry.pid);
+  const stillAliveAfterTerm = await waitForProcessesExit(pids, graceMs);
+  result.terminated = pids.length - stillAliveAfterTerm.size;
 
+  for (const entry of entries.filter((entry) => stillAliveAfterTerm.has(entry.pid))) {
     await killProcessTree(entry.pid, "SIGKILL");
-    if (await waitForProcessExit(entry.pid, 1_000)) {
-      result.forceKilled++;
-    } else {
-      result.failed++;
-    }
   }
+
+  const stillAliveAfterKill = await waitForProcessesExit([...stillAliveAfterTerm], 1_000);
+  result.forceKilled = stillAliveAfterTerm.size - stillAliveAfterKill.size;
+  result.failed = stillAliveAfterKill.size;
 
   pruneSweptDaemonChildren(new Set(entries.map((entry) => entry.pid)));
   return result;
@@ -467,18 +503,17 @@ export async function reapAoOrphans(
     await killProcessTree(orphan.pid, "SIGTERM");
   }
 
-  for (const orphan of orphans) {
-    if (await waitForProcessExit(orphan.pid, graceMs)) {
-      result.terminated++;
-      continue;
-    }
+  const pids = orphans.map((orphan) => orphan.pid);
+  const stillAliveAfterTerm = await waitForProcessesExit(pids, graceMs);
+  result.terminated = pids.length - stillAliveAfterTerm.size;
+
+  for (const orphan of orphans.filter((orphan) => stillAliveAfterTerm.has(orphan.pid))) {
     await killProcessTree(orphan.pid, "SIGKILL");
-    if (await waitForProcessExit(orphan.pid, 1_000)) {
-      result.forceKilled++;
-    } else {
-      result.failed++;
-    }
   }
+
+  const stillAliveAfterKill = await waitForProcessesExit([...stillAliveAfterTerm], 1_000);
+  result.forceKilled = stillAliveAfterTerm.size - stillAliveAfterKill.size;
+  result.failed = stillAliveAfterKill.size;
 
   return result;
 }
