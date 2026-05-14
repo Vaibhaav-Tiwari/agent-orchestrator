@@ -71,6 +71,38 @@ function getReviewUrl(notification: DashboardNotificationRecord): string | null 
   return review ? stringField(review, "url") : null;
 }
 
+function normalizeActionText(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function canonicalUrl(value: string | null | undefined): string | null {
+  if (!value || value.trim().length === 0) return null;
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    const pathname = url.pathname.replace(/\/+$/, "");
+    return `${url.origin}${pathname}${url.search}`;
+  } catch {
+    return value.trim().replace(/\/+$/, "");
+  }
+}
+
+function shouldHideRedundantAction(
+  action: { label: string; url: string },
+  links: { prUrl: string | null; reviewUrl: string | null },
+): boolean {
+  const label = normalizeActionText(action.label);
+  const actionUrl = canonicalUrl(action.url);
+  const prUrl = canonicalUrl(links.prUrl);
+  const reviewUrl = canonicalUrl(links.reviewUrl);
+
+  if (label.includes("dashboard")) return true;
+  if (prUrl && actionUrl === prUrl) return true;
+  if (reviewUrl && actionUrl === reviewUrl) return true;
+
+  return false;
+}
+
 function getEscalationCause(notification: DashboardNotificationRecord): string | null {
   const data = notificationDataV3(notification);
   if (!data) return null;
@@ -164,10 +196,12 @@ function NotificationItem({
   const escalationCause = getEscalationCause(notification);
   const successLabel = successNotificationLabel(notification);
   const label = successLabel ?? event.priority;
-  const urlActions = (notification.actions ?? []).filter(
-    (action): action is { label: string; url: string } =>
-      typeof action.url === "string" && action.url.trim().length > 0,
-  );
+  const urlActions = (notification.actions ?? [])
+    .filter(
+      (action): action is { label: string; url: string } =>
+        typeof action.url === "string" && action.url.trim().length > 0,
+    )
+    .filter((action) => !shouldHideRedundantAction(action, { prUrl, reviewUrl }));
 
   return (
     <li

@@ -177,4 +177,32 @@ describe("DashboardNotificationButton", () => {
     expect(screen.getAllByRole("listitem")[0]).toHaveClass("dashboard-notification-item--success");
     expect(screen.getAllByRole("listitem")[1]).toHaveClass("dashboard-notification-item--success");
   });
+
+  it("hides redundant dashboard and PR actions from notification cards", () => {
+    muxValue.notifications = [
+      {
+        ...makeNotification("1", "CI failed"),
+        actions: [
+          { label: "Open dashboard", url: "http://localhost:3000" },
+          { label: "View PR", url: "https://github.com/acme/app/pull/1" },
+          { label: "CI run", url: "https://github.com/acme/app/actions/runs/1" },
+        ],
+      },
+    ];
+
+    render(<DashboardNotificationButton />);
+
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Notifications" }));
+
+    expect(screen.queryByRole("link", { name: "Open dashboard" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "View PR" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "PR" })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/app/pull/1",
+    );
+    expect(screen.getByRole("link", { name: "CI run" })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/app/actions/runs/1",
+    );
+  });
 });
