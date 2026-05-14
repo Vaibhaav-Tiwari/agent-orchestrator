@@ -36,6 +36,10 @@ vi.mock("../../src/lib/script-runner.js", () => ({
 }));
 
 vi.mock("@aoagents/ao-core", () => ({
+  buildCIFailureNotificationData: () => ({ schemaVersion: 3 }),
+  buildPRStateNotificationData: () => ({ schemaVersion: 3 }),
+  buildReactionNotificationData: () => ({ schemaVersion: 3 }),
+  buildSessionTransitionNotificationData: () => ({ schemaVersion: 3 }),
   createPluginRegistry: (...args: unknown[]) => mockCreatePluginRegistry(...args),
   findConfigFile: (...args: unknown[]) => mockFindConfigFile(...args),
   getObservabilityBaseDir: () => "/tmp/.agent-orchestrator/observability",

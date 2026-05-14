@@ -32,6 +32,13 @@ function getBlocks(body: Record<string, any>): Array<Record<string, any>> {
   return getAttachment(body).blocks;
 }
 
+function expectDefined<T>(value: T | undefined): asserts value is T {
+  expect(value).toBeDefined();
+  if (value === undefined) {
+    throw new Error("Expected value to be defined");
+  }
+}
+
 describe("notifier-slack integration", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -97,9 +104,9 @@ describe("notifier-slack integration", () => {
 
       // PR link is rendered as an action button
       const actionsBlock = blocks.find((b: Record<string, unknown>) => b.type === "actions");
-      expect(actionsBlock).toBeDefined();
-      expect(actionsBlock!.elements[0].text.text).toBe("View PR");
-      expect(actionsBlock!.elements[0].url).toBe("https://github.com/org/repo/pull/42");
+      expectDefined(actionsBlock);
+      expect(actionsBlock.elements[0].text.text).toBe("View PR");
+      expect(actionsBlock.elements[0].url).toBe("https://github.com/org/repo/pull/42");
 
       // CI status block
       const ciBlock = blocks.find(
@@ -109,7 +116,7 @@ describe("notifier-slack integration", () => {
           typeof (b as { elements: Array<{ text?: string }> }).elements[0]?.text === "string" &&
           (b as { elements: Array<{ text: string }> }).elements[0].text.includes("CI:"),
       );
-      expect(ciBlock).toBeDefined();
+      expectDefined(ciBlock);
       expect(ciBlock.elements[0].text).toContain(":x:");
       expect(ciBlock.elements[0].text).toContain("failing");
 
@@ -132,6 +139,7 @@ describe("notifier-slack integration", () => {
           typeof (b as { elements: Array<{ text?: string }> }).elements[0]?.text === "string" &&
           (b as { elements: Array<{ text: string }> }).elements[0].text.includes("CI:"),
       );
+      expectDefined(ciBlock);
       expect(ciBlock.elements[0].text).toContain(":white_check_mark:");
     });
 
@@ -186,7 +194,7 @@ describe("notifier-slack integration", () => {
       const actionsBlock = getBlocks(body).find(
         (b: Record<string, unknown>) => b.type === "actions",
       );
-      expect(actionsBlock).toBeDefined();
+      expectDefined(actionsBlock);
       expect(actionsBlock.elements).toHaveLength(2);
 
       // URL button
@@ -216,6 +224,7 @@ describe("notifier-slack integration", () => {
       const actionsBlock = getBlocks(body).find(
         (b: Record<string, unknown>) => b.type === "actions",
       );
+      expectDefined(actionsBlock);
       expect(actionsBlock.elements).toHaveLength(1);
       expect(actionsBlock.elements[0].text.text).toBe("Has Link");
     });

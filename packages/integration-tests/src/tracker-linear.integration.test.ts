@@ -116,6 +116,21 @@ function linearGraphQL<T>(query: string, variables: Record<string, unknown>): Pr
   return executeWithRetry();
 }
 
+async function retryExternal<T>(operation: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (err) {
+      lastError = err;
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+    }
+  }
+  throw lastError;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -144,13 +159,15 @@ describe.skipIf(!canRun)("tracker-linear (integration)", () => {
   // -------------------------------------------------------------------------
 
   beforeAll(async () => {
-    const result = await tracker.createIssue!(
-      {
-        title: `[AO Integration Test] ${new Date().toISOString()}`,
-        description: "Automated integration test issue. Safe to delete if found lingering.",
-        priority: 4, // Low
-      },
-      project,
+    const result = await retryExternal(() =>
+      tracker.createIssue!(
+        {
+          title: `[AO Integration Test] ${new Date().toISOString()}`,
+          description: "Automated integration test issue. Safe to delete if found lingering.",
+          priority: 4, // Low
+        },
+        project,
+      ),
     );
 
     issueIdentifier = result.id;
@@ -167,7 +184,7 @@ describe.skipIf(!canRun)("tracker-linear (integration)", () => {
         issueUuid = undefined;
       }
     }
-  }, 30_000);
+  }, 120_000);
 
   // -------------------------------------------------------------------------
   // Cleanup — archive the test issue so it doesn't clutter the board.
@@ -195,7 +212,7 @@ describe.skipIf(!canRun)("tracker-linear (integration)", () => {
     } catch {
       // Best-effort cleanup
     }
-  }, 15_000);
+  }, 60_000);
 
   // -------------------------------------------------------------------------
   // Test cases
