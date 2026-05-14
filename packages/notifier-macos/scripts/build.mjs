@@ -15,6 +15,7 @@ const macOsDir = resolve(contentsDir, "MacOS");
 const resourcesDir = resolve(contentsDir, "Resources");
 const executablePath = resolve(macOsDir, "ao-notifier");
 const swiftSource = resolve(packageDir, "src", "AONotifier.swift");
+const sourceIconSvg = resolve(packageDir, "assets", "AppIcon.svg");
 
 function commandExists(command) {
   try {
@@ -129,8 +130,30 @@ function writeIcon() {
   rmSync(iconsetDir, { recursive: true, force: true });
   mkdirSync(iconsetDir, { recursive: true });
   const sizes = [16, 32, 64, 128, 256, 512, 1024];
-  for (const size of sizes) {
-    writeFileSync(resolve(iconsetDir, `icon_${size}x${size}.png`), makePng(size));
+
+  const canRenderSvgIcon = existsSync(sourceIconSvg) && commandExists("sips");
+  if (canRenderSvgIcon) {
+    for (const size of sizes) {
+      execFileSync(
+        "sips",
+        [
+          "-s",
+          "format",
+          "png",
+          "--resampleHeightWidth",
+          String(size),
+          String(size),
+          sourceIconSvg,
+          "--out",
+          resolve(iconsetDir, `icon_${size}x${size}.png`),
+        ],
+        { stdio: "ignore" },
+      );
+    }
+  } else {
+    for (const size of sizes) {
+      writeFileSync(resolve(iconsetDir, `icon_${size}x${size}.png`), makePng(size));
+    }
   }
 
   if (process.platform === "darwin" && commandExists("iconutil")) {
