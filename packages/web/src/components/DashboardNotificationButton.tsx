@@ -59,16 +59,29 @@ function getSubjectPR(notification: DashboardNotificationRecord): Record<string,
   return subject ? recordField(subject, "pr") : null;
 }
 
+function sanitizeExternalUrl(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.toString();
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function getPRUrl(notification: DashboardNotificationRecord): string | null {
   const pr = getSubjectPR(notification);
-  return pr ? stringField(pr, "url") : null;
+  return sanitizeExternalUrl(pr ? stringField(pr, "url") : null);
 }
 
 function getReviewUrl(notification: DashboardNotificationRecord): string | null {
   const data = notificationDataV3(notification);
   if (!data) return null;
   const review = recordField(data, "review");
-  return review ? stringField(review, "url") : null;
+  return sanitizeExternalUrl(review ? stringField(review, "url") : null);
 }
 
 function normalizeActionText(value: string): string {
@@ -197,10 +210,13 @@ function NotificationItem({
   const successLabel = successNotificationLabel(notification);
   const label = successLabel ?? event.priority;
   const urlActions = (notification.actions ?? [])
-    .filter(
-      (action): action is { label: string; url: string } =>
-        typeof action.url === "string" && action.url.trim().length > 0,
-    )
+    .map((action) => {
+      const sanitizedUrl = sanitizeExternalUrl(
+        typeof action.url === "string" ? action.url.trim() : null,
+      );
+      return sanitizedUrl ? { label: action.label, url: sanitizedUrl } : null;
+    })
+    .filter((action): action is { label: string; url: string } => action !== null)
     .filter((action) => !shouldHideRedundantAction(action, { prUrl, reviewUrl }));
 
   return (
