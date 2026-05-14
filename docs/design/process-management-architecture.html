@@ -292,6 +292,138 @@
       </section>
 
       <section class="card">
+        <h2>PR code references</h2>
+        <p>
+          Links below point to the relevant files in the PR changes view, so the architecture can be
+          read next to the implementation diff.
+        </p>
+        <table class="matrix" aria-label="PR code references">
+          <thead>
+            <tr>
+              <th>Area</th>
+              <th>PR file reference</th>
+              <th>What to review</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Managed child registry and interface</td>
+              <td>
+                <a
+                  href="https://github.com/ComposioHQ/agent-orchestrator/pull/1849/changes#diff-2425d512bebdd0097d38239c35d65352c316c8a54e4dc657bdeb41835ae55a52"
+                  ><code>packages/core/src/daemon-children.ts</code></a
+                >
+              </td>
+              <td>
+                <code>spawnManagedDaemonChild</code>, <code>registerChildReaper</code>,
+                <code>sweepDaemonChildren({ ownerPid })</code>, registry locking, signal forwarding,
+                orphan detection.
+              </td>
+            </tr>
+            <tr>
+              <td>CLI daemon consumer</td>
+              <td>
+                <a
+                  href="https://github.com/ComposioHQ/agent-orchestrator/pull/1849/changes#diff-6858dc88bcb8c8d88063b185a5bddbe2709171731c56c401cbf793bf7ff5baa1"
+                  ><code>packages/cli/src/commands/start.ts</code></a
+                >
+              </td>
+              <td>
+                Dashboard spawn path, <code>ao stop</code> owner-scoped registry sweep,
+                <code>--reap-orphans</code>, and startup orphan prompt.
+              </td>
+            </tr>
+            <tr>
+              <td>Attached daemon replacement / restart</td>
+              <td>
+                <a
+                  href="https://github.com/ComposioHQ/agent-orchestrator/pull/1849/changes#diff-320fe52686d35037c4aa32f761bbf3822bdb28a6e79c65de05dbb05e3d50e47d"
+                  ><code>packages/cli/src/lib/daemon.ts</code></a
+                >
+              </td>
+              <td>
+                Existing daemon kill path now sweeps only children whose <code>parentPid</code> is
+                the daemon PID being stopped.
+              </td>
+            </tr>
+            <tr>
+              <td>Ctrl+C / SIGTERM shutdown owner</td>
+              <td>
+                <a
+                  href="https://github.com/ComposioHQ/agent-orchestrator/pull/1849/changes#diff-ee91358f6b5ffbbe0cb5b674dcc22f60eee6ae76ce98ceaab07e0c3d9799be59"
+                  ><code>packages/cli/src/lib/shutdown.ts</code></a
+                >
+              </td>
+              <td>
+                Marks app-level shutdown ownership and runs owner-scoped child sweep before
+                unregistering <code>running.json</code>.
+              </td>
+            </tr>
+            <tr>
+              <td>Dashboard launcher consumer</td>
+              <td>
+                <a
+                  href="https://github.com/ComposioHQ/agent-orchestrator/pull/1849/changes#diff-74d65253c6d49a86150b62415d7a61d74be39b2f1a1bab63bc5a5289be596ba4"
+                  ><code>packages/web/server/start-all.ts</code></a
+                >
+              </td>
+              <td>
+                Next.js and terminal websocket children are spawned through the managed-child
+                interface, with dashboard-level shutdown ownership.
+              </td>
+            </tr>
+            <tr>
+              <td>Platform kill abstraction</td>
+              <td>
+                <a
+                  href="https://github.com/ComposioHQ/agent-orchestrator/pull/1849/changes#diff-6a685459fa19673e7c67a5645841a572f0418b54e2f02ac67f82d0e3b495ba0e"
+                  ><code>packages/core/src/platform.ts</code></a
+                >
+              </td>
+              <td>
+                Centralized platform helpers used by the process-management path; callers avoid
+                ad-hoc <code>process.platform</code> checks.
+              </td>
+            </tr>
+            <tr>
+              <td>Lint guardrail</td>
+              <td>
+                <a
+                  href="https://github.com/ComposioHQ/agent-orchestrator/pull/1849/changes#diff-a32a0887ed9d1d707bbb3b845b7df7fd40e673c47e7b60a3ebd896b68d3b8839"
+                  ><code>eslint.config.js</code></a
+                >
+              </td>
+              <td>
+                Prevents daemon entrypoints from importing raw <code>spawn</code> for daemon-owned
+                long-running subprocesses.
+              </td>
+            </tr>
+            <tr>
+              <td>Unit and integration coverage</td>
+              <td>
+                <a
+                  href="https://github.com/ComposioHQ/agent-orchestrator/pull/1849/changes#diff-11a62cb44890c221ccf2a5c28f71eb05f1db3f4cda299eab98bd4b9d6c34bc79"
+                  ><code>core daemon-children test</code></a
+                >,
+                <a
+                  href="https://github.com/ComposioHQ/agent-orchestrator/pull/1849/changes#diff-0300488049f01481620a511f763193989b41a00f59b4e4ecb2bd25cb167146b8"
+                  ><code>CLI start/stop tests</code></a
+                >,
+                <a
+                  href="https://github.com/ComposioHQ/agent-orchestrator/pull/1849/changes#diff-a4da6ce0180813818a6fd620633460df4ece2996541c24d132691d3085f64ee5"
+                  ><code>integration test</code></a
+                >
+              </td>
+              <td>
+                Registry behavior, owner-scoped sweeps, orphan command detection, and
+                <code>ao start</code> → child capture → <code>ao stop</code> termination.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
         <h2>Problem statement</h2>
         <p>
           AO has a long-running foreground daemon started by <code>ao start</code>. That daemon owns
