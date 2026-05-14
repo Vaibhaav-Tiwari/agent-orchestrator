@@ -149,7 +149,9 @@ export class SessionBroadcaster {
     }
     if (err instanceof Error) {
       const message = err.message.toLowerCase();
-      return message.includes("aborted") || message.includes("aborterror");
+      // Match known stringified forms of AbortError only; avoid broad substring
+      // checks that catch unrelated error messages containing "aborted".
+      return message === "the operation was aborted." || message.includes("aborterror");
     }
     return false;
   }
@@ -192,7 +194,7 @@ export class SessionBroadcaster {
     error: string | null;
   }> {
     const first = await this.fetchSnapshotAttempt();
-    if (!first.aborted || first.sessions) {
+    if (!first.aborted) {
       return { sessions: first.sessions, error: first.error };
     }
 

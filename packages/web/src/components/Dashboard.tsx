@@ -5,13 +5,13 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMediaQuery, MOBILE_BREAKPOINT } from "@/hooks/useMediaQuery";
 import {
-  NON_RESTORABLE_STATUSES,
   type DashboardSession,
   type AttentionLevel,
   type DashboardOrchestratorLink,
   type DashboardAttentionZoneMode,
   getAttentionLevel,
   isPRRateLimited,
+  isDashboardSessionRestorable,
   isDashboardSessionTerminated,
 } from "@/lib/types";
 import { AttentionZone } from "./AttentionZone";
@@ -91,7 +91,7 @@ function DoneCard({
     session.id;
   const isMerged = session.pr?.state === "merged" || session.status === "merged";
   const isTerminated = isDashboardSessionTerminated(session);
-  const canRestore = !NON_RESTORABLE_STATUSES.has(session.status);
+  const canRestore = isDashboardSessionRestorable(session);
   const badgeLabel = isMerged ? "merged" : isTerminated ? "terminated" : "done";
   const badgeClass = `done-card__badge ${isTerminated ? "done-card__badge--terminated" : "done-card__badge--merged"}`;
 
