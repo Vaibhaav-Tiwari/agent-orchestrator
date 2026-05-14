@@ -2416,7 +2416,7 @@ describe("reactions", () => {
     const sentMessage = vi.mocked(mockSessionManager.send).mock.calls[0]![1];
     expect(sentMessage).toContain("CI is failing on your PR.");
     expect(sentMessage).toContain("Failed: build → Run pnpm test");
-    expect(sentMessage).toContain("Run: https://github.com/org/repo/actions/runs/123/job/456");
+    expect(sentMessage).toContain("Failure URL: https://github.com/org/repo/actions/runs/123/job/456");
     expect(sentMessage).toContain("Log tail (last 3 lines):");
     expect(sentMessage).toContain("AssertionError: expected true to be false");
     expect(sentMessage).toContain("\u200B```");

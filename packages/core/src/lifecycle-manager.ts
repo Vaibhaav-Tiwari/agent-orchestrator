@@ -1937,7 +1937,7 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
     for (const job of summary.failedJobs) {
       const failed = job.failedStep ? `${job.name} → ${job.failedStep}` : job.name;
       lines.push(`Failed: ${failed}`);
-      lines.push(`Run: ${job.runUrl}`);
+      lines.push(`Failure URL: ${job.runUrl}`);
 
       if (job.logTail) {
         const lineCount = job.logTail.split(/\r?\n/).length;
