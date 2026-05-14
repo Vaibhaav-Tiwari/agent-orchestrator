@@ -320,7 +320,9 @@ describe("restore", () => {
     expect(lifecycle.session.state).toBe("working");
     expect(lifecycle.session.completedAt).toBeNull();
     expect(lifecycle.session.terminatedAt).toBeNull();
-    expect(lifecycle.session.lastTransitionAt).not.toBe("2025-01-01T00:02:00.000Z");
+    expect(new Date(lifecycle.session.lastTransitionAt).getTime()).toBeGreaterThan(
+      new Date("2025-01-01T00:02:00.000Z").getTime(),
+    );
   });
 
   it("preserves displayName when restoring terminated session", async () => {

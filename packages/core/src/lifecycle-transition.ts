@@ -19,7 +19,11 @@ import type {
   SessionId,
   SessionStatus,
 } from "./types.js";
-import { cloneLifecycle, deriveLegacyStatus } from "./lifecycle-state.js";
+import {
+  clearTerminalMarkersForNonTerminalState,
+  cloneLifecycle,
+  deriveLegacyStatus,
+} from "./lifecycle-state.js";
 import { updateMetadata, readMetadataRaw, readCanonicalLifecycle } from "./metadata.js";
 import type { LifecycleDecision } from "./lifecycle-status-decisions.js";
 
@@ -35,18 +39,6 @@ export type TransitionSource =
   | "cleanup" // Session cleanup
   | "claim_pr"; // PR claim
 
-const TERMINAL_SESSION_STATES: ReadonlySet<CanonicalSessionState> = new Set([
-  "done",
-  "terminated",
-]);
-
-function clearTerminalMarkersForNonTerminalState(
-  lifecycle: CanonicalSessionLifecycle,
-): void {
-  if (TERMINAL_SESSION_STATES.has(lifecycle.session.state)) return;
-  lifecycle.session.completedAt = null;
-  lifecycle.session.terminatedAt = null;
-}
 
 /**
  * Result of a lifecycle transition attempt.
