@@ -13,7 +13,7 @@ vi.mock("../activity-events.js", () => ({
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal();
   return {
-    ...(actual as typeof import("node:child_process")),
+    ...(actual as Record<string, unknown>),
     execSync: vi.fn(),
   };
 });
