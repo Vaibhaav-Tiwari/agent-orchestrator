@@ -22,11 +22,43 @@ const __dirname = dirname(__filename);
 // Resolve paths relative to the package root (one level up from dist-server/)
 const pkgRoot = resolve(__dirname, "..");
 
-const children: ChildProcess[] = [];
-markDaemonShutdownHandlerInstalled();
+export const DEFAULT_SHUTDOWN_GRACE_MS = 15_000;
+const POST_SIGKILL_VERIFY_MS = 2_000;
+
+interface ManagedChild {
+  label: string;
+  child: ChildProcess;
+  exited: boolean;
+}
+
+const children: ManagedChild[] = [];
+let shuttingDown = false;
 
 function log(label: string, msg: string): void {
   process.stdout.write(`[${label}] ${msg}\n`);
+}
+
+function logLevel(label: string, level: "info" | "warn" | "error", msg: string): void {
+  log(label, `${level}: ${msg}`);
+}
+
+export function getShutdownGraceMs(
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): number {
+  const raw = env["AO_SHUTDOWN_GRACE_MS"];
+  if (!raw) return DEFAULT_SHUTDOWN_GRACE_MS;
+
+  const parsed = Math.floor(Number(raw));
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_SHUTDOWN_GRACE_MS;
+  return parsed;
+}
+
+export function formatCleanShutdownMessage(elapsedMs: number): string {
+  return `all children shut down cleanly in ${elapsedMs}ms`;
+}
+
+export function formatForceKillFallbackMessage(label: string, graceMs: number): string {
+  return `${label} did not exit within ${graceMs}ms — sent SIGKILL (safety fallback, no orphans leaked)`;
 }
 
 function spawnProcess(
@@ -59,21 +91,23 @@ function spawnProcess(
       }
     });
 
-    child.on("exit", (code) => {
+    child.on("exit", (code: number | null) => {
+      const current = children[slotIndex];
+      if (current?.child === child) current.exited = true;
       log(label, `exited with code ${code}`);
       if (!shuttingDown && opts?.restart && code !== 0 && restarts < maxRestarts) {
         restarts++;
         log(label, `restarting (attempt ${restarts}/${maxRestarts})`);
         const replacement = launch();
         // Replace in-place — slot was assigned on first push
-        children[slotIndex] = replacement;
+        children[slotIndex] = { label, child: replacement, exited: false };
       }
     });
 
     // Only push on first launch; restarts replace the existing slot
     if (slotIndex === -1) {
       slotIndex = children.length;
-      children.push(child);
+      children.push({ label, child, exited: false });
     }
 
     return child;
@@ -105,68 +139,100 @@ function resolveNextBin(): string {
   }
 }
 
-// Start Next.js production server
-const port = process.env["PORT"] || "3000";
-const pathBasedMux = process.env["AO_PATH_BASED_MUX"] === "1";
-
-// When AO_PATH_BASED_MUX=1, single-port-server.js owns PORT and Next.js is
-// shifted to PORT + 1000 (overridable via NEXT_INTERNAL_PORT). The proxy
-// forwards HTTP to Next.js and tunnels `/ao-terminal-mux` WS upgrades to
-// direct-terminal-ws. Default off — Next.js stays on PORT directly.
-const NEXT_INTERNAL_OFFSET = 1000;
-const nextPort = pathBasedMux
-  ? (process.env["NEXT_INTERNAL_PORT"] ?? String(parseInt(port, 10) + NEXT_INTERNAL_OFFSET))
-  : port;
-
-const nextBin = resolveNextBin();
-
-if (isWindows() && nextBin !== "next") {
-  // On Windows, run the JS entry point via the current node binary.
-  // spawn() can't execute .js files directly on Windows.
-  spawnProcess("next", process.execPath, [nextBin, "start", "-p", nextPort]);
-} else {
-  spawnProcess("next", nextBin, ["start", "-p", nextPort]);
-}
-
-if (pathBasedMux) {
-  // Surface the internal port to the child so it doesn't have to re-derive
-  // the offset; pin it explicitly.
-  process.env["NEXT_INTERNAL_PORT"] = nextPort;
-  spawnProcess("single-port", process.execPath, [resolve(__dirname, "single-port-server.js")]);
-}
-
-// Start direct terminal WebSocket server (auto-restart on crash)
-spawnProcess("direct-terminal", "node", [resolve(__dirname, "direct-terminal-ws.js")], {
-  restart: true,
-});
-
-// Graceful shutdown — send SIGTERM to children and wait for them to exit
-let shuttingDown = false;
-
 function cleanup(): void {
   if (shuttingDown) return;
   shuttingDown = true;
 
-  let alive = children.length;
-  if (alive === 0) {
+  const graceMs = getShutdownGraceMs();
+  const shutdownStartedAt = Date.now();
+  const alive = new Set(children.filter(({ exited }) => !exited));
+  let forceFallbackStarted = false;
+
+  const finishIfDone = (): void => {
+    if (alive.size > 0) return;
+    if (!forceFallbackStarted) {
+      logLevel("start-all", "info", formatCleanShutdownMessage(Date.now() - shutdownStartedAt));
+    }
     process.exit(0);
+  };
+
+  if (alive.size === 0) {
+    finishIfDone();
     return;
   }
 
-  // Force exit after 5s if children don't exit cleanly
   const forceTimer = setTimeout(() => {
-    log("start-all", "Children did not exit in time, forcing shutdown");
-    process.exit(1);
-  }, 5000);
+    forceFallbackStarted = true;
+    void forceKillRemainingChildren(alive, graceMs);
+  }, graceMs);
   forceTimer.unref();
 
-  for (const child of children) {
-    child.on("exit", () => {
-      alive--;
-      if (alive <= 0) {
-        clearTimeout(forceTimer);
+  async function forceKillRemainingChildren(stuckChildren: Set<ManagedChild>, grace: number) {
+    const stuck = [...stuckChildren].filter(({ exited }) => !exited);
+    if (stuck.length === 0) {
+      finishIfDone();
+      return;
+    }
+
+    const results = await Promise.all(
+      stuck.map(async ({ label, child }) => {
+        logLevel("start-all", "warn", formatForceKillFallbackMessage(label, grace));
+        const pid = child.pid;
+        if (!pid) {
+          try {
+            return child.kill("SIGKILL");
+          } catch {
+            return false;
+          }
+        }
+
+        try {
+          await killProcessTree(pid, "SIGKILL");
+          return true;
+        } catch {
+          try {
+            return child.kill("SIGKILL");
+          } catch {
+            return false;
+          }
+        }
+      }),
+    );
+
+    if (results.some((sent) => !sent)) {
+      logLevel(
+        "start-all",
+        "error",
+        "SIGKILL fallback failed for one or more children; manual cleanup may be required",
+      );
+      process.exit(1);
+      return;
+    }
+
+    const verifyTimer = setTimeout(() => {
+      const stillAlive = [...stuckChildren].filter(({ exited }) => !exited);
+      if (stillAlive.length === 0) {
         process.exit(0);
+        return;
       }
+
+      logLevel(
+        "start-all",
+        "error",
+        `${stillAlive.map(({ label }) => label).join(", ")} remained alive after SIGKILL; manual cleanup may be required`,
+      );
+      process.exit(1);
+    }, POST_SIGKILL_VERIFY_MS);
+    verifyTimer.unref();
+  }
+
+  for (const info of alive) {
+    const { child } = info;
+    child.on("exit", () => {
+      info.exited = true;
+      alive.delete(info);
+      if (alive.size <= 0) clearTimeout(forceTimer);
+      finishIfDone();
     });
     const pid = child.pid;
     if (pid) {
@@ -179,5 +245,41 @@ function cleanup(): void {
   }
 }
 
-process.on("SIGINT", cleanup);
-process.on("SIGTERM", cleanup);
+export function runStartAll(): void {
+  markDaemonShutdownHandlerInstalled();
+
+  // Start Next.js production server
+  const port = process.env["PORT"] || "3000";
+  const pathBasedMux = process.env["AO_PATH_BASED_MUX"] === "1";
+  const NEXT_INTERNAL_OFFSET = 1000;
+  const nextPort = pathBasedMux
+    ? (process.env["NEXT_INTERNAL_PORT"] ?? String(parseInt(port, 10) + NEXT_INTERNAL_OFFSET))
+    : port;
+  const nextBin = resolveNextBin();
+
+  if (isWindows() && nextBin !== "next") {
+    // On Windows, run the JS entry point via the current node binary.
+    // spawn() can't execute .js files directly on Windows.
+    spawnProcess("next", process.execPath, [nextBin, "start", "-p", nextPort]);
+  } else {
+    spawnProcess("next", nextBin, ["start", "-p", nextPort]);
+  }
+
+  if (pathBasedMux) {
+    // Surface the internal port to the child so it doesn't have to re-derive
+    // the offset; pin it explicitly.
+    process.env["NEXT_INTERNAL_PORT"] = nextPort;
+    spawnProcess("single-port", process.execPath, [resolve(__dirname, "single-port-server.js")]);
+  }
+
+  // Start direct terminal WebSocket server (auto-restart on crash)
+  spawnProcess("direct-terminal", "node", [resolve(__dirname, "direct-terminal-ws.js")], {
+    restart: true,
+  });
+
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+}
+
+const isMainModule = process.argv[1] ? resolve(process.argv[1]) === __filename : false;
+if (isMainModule) runStartAll();

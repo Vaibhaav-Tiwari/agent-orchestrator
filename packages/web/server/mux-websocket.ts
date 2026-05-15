@@ -83,7 +83,9 @@ export class SessionBroadcaster {
   private subscribers = new Set<(sessions: SessionPatch[]) => void>();
   private errorSubscribers = new Set<(error: string) => void>();
   private intervalId: ReturnType<typeof setInterval> | null = null;
+  private controllers = new Set<AbortController>();
   private polling = false;
+  private shuttingDown = false;
   // Tracks the last fetch outcome so we only emit ui.session_broadcast_failed on
   // the healthy → failing transition (not every 3s during an outage).
   private lastFetchOk = true;
@@ -173,6 +175,7 @@ export class SessionBroadcaster {
     error: string | null;
   }> {
     const controller = new AbortController();
+    this.controllers.add(controller);
     const timeoutId = setTimeout(() => controller.abort(), 4000);
     try {
       const res = await fetch(`${this.baseUrl}/api/sessions/patches`, {
@@ -190,11 +193,24 @@ export class SessionBroadcaster {
       return { sessions: data.sessions ?? null, error: null };
     } catch (err) {
       clearTimeout(timeoutId);
+      if (this.shuttingDown && (controller.signal.aborted || isAbortError(err))) {
+        return { sessions: null, error: null };
+      }
       const msg = err instanceof Error ? err.message : String(err);
       console.warn("[SessionBroadcaster] fetchSnapshot error:", msg);
       this.recordFetchFailure(msg);
       return { sessions: null, error: msg };
+    } finally {
+      this.controllers.delete(controller);
     }
+  }
+
+  shutdown(): void {
+    this.shuttingDown = true;
+    for (const controller of this.controllers) {
+      controller.abort();
+    }
+    this.disconnect();
   }
 
   /**
@@ -381,6 +397,14 @@ export class NotificationBroadcaster {
   }
 }
 
+function isAbortError(err: unknown): boolean {
+  if (err instanceof DOMException) return err.name === "AbortError";
+  if (err instanceof Error) {
+    return err.name === "AbortError" || /aborted|abort/i.test(err.message);
+  }
+  return false;
+}
+
 // node-pty is an optionalDependency — load dynamically
 /* eslint-disable @typescript-eslint/consistent-type-imports -- node-pty is optional; static import would crash if missing */
 type IPty = import("node-pty").IPty;
@@ -446,6 +470,7 @@ interface ManagedTerminal {
 const RING_BUFFER_MAX = 50 * 1024; // 50KB max per terminal
 const WS_BUFFER_HIGH_WATERMARK = 64 * 1024; // 64KB
 const MAX_REATTACH_ATTEMPTS = 3;
+export const PTY_SHUTDOWN_DRAIN_MS = 1_000;
 /**
  * Grace period a freshly-attached PTY must survive before its successful
  * attach is allowed to reset the re-attach counter. Prevents tight crash
@@ -467,6 +492,7 @@ export class TerminalManager {
   private terminals = new Map<string, ManagedTerminal>();
   private TMUX: string;
   private spawnHelperRepairAttempted = false;
+  private shuttingDown = false;
 
   constructor(tmuxPath?: string) {
     const resolved = tmuxPath ?? findTmux();
@@ -653,6 +679,17 @@ export class TerminalManager {
       terminal.pty = null;
       let reattachError: string | undefined;
 
+      if (this.shuttingDown) {
+        if (terminal.resetTimer) {
+          clearTimeout(terminal.resetTimer);
+          terminal.resetTimer = undefined;
+        }
+        for (const cb of terminal.exitCallbacks) {
+          cb(exitCode);
+        }
+        return;
+      }
+
       // Skip the re-attach loop entirely when the underlying tmux session is
       // gone (e.g. user pressed Ctrl-C in the pane and the launch command
       // exited, taking the only window with it). Without this guard we
@@ -830,11 +867,11 @@ export class TerminalManager {
           clearTimeout(terminal.resetTimer);
           terminal.resetTimer = undefined;
         }
-        if (terminal.pty) {
+        if (!this.shuttingDown && terminal.pty) {
           terminal.pty.kill();
           terminal.pty = null;
         }
-        this.terminals.delete(key);
+        if (!this.shuttingDown) this.terminals.delete(key);
       }
     };
   }
@@ -846,6 +883,103 @@ export class TerminalManager {
     const terminal = this.terminals.get(this.terminalKey(id, projectId));
     if (!terminal) return "";
     return terminal.buffer.join("");
+  }
+
+  private async findTmuxClientName(tmuxSessionId: string, ptyPid: number): Promise<string | null> {
+    return new Promise((resolve) => {
+      const proc = spawn(this.TMUX, [
+        "list-clients",
+        "-t",
+        `=${tmuxSessionId}`,
+        "-F",
+        "#{client_pid}\t#{client_name}",
+      ]);
+      let stdout = "";
+      let settled = false;
+      const finish = (clientName: string | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(clientName);
+      };
+      const timer = setTimeout(() => {
+        proc.kill("SIGTERM");
+        finish(null);
+      }, 500);
+      timer.unref();
+
+      if (!proc.stdout) {
+        finish(null);
+        return;
+      }
+      proc.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+      });
+      proc.on("error", () => finish(null));
+      proc.on("close", () => {
+        for (const line of stdout.split("\n")) {
+          const [pidText, clientName] = line.split("\t");
+          if (Number(pidText) === ptyPid && clientName) {
+            finish(clientName);
+            return;
+          }
+        }
+        finish(null);
+      });
+    });
+  }
+
+  private async detachManagedPtyClient(terminal: ManagedTerminal): Promise<void> {
+    const ptyPid = terminal.pty?.pid;
+    if (ptyPid) {
+      const clientName = await this.findTmuxClientName(terminal.tmuxSessionId, ptyPid);
+      if (clientName) {
+        try {
+          spawn(this.TMUX, ["detach-client", "-t", clientName]).on("error", () => {
+            // Best-effort; fallback below covers spawn failures.
+          });
+          return;
+        } catch {
+          // Fall through to the PTY-local detach key.
+        }
+      }
+    }
+
+    try {
+      // Fallback to the default tmux detach key (Ctrl-B, d). This targets only
+      // the managed PTY client instead of detaching every client on the session.
+      terminal.pty?.write("\x02d");
+    } catch {
+      // Best-effort; the kill fallback below handles stubborn PTYs.
+    }
+  }
+
+  async shutdownGracefully(drainMs = PTY_SHUTDOWN_DRAIN_MS): Promise<void> {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
+
+    const attached = [...this.terminals.values()].filter((terminal) => terminal.pty);
+    for (const terminal of attached) {
+      if (terminal.resetTimer) {
+        clearTimeout(terminal.resetTimer);
+        terminal.resetTimer = undefined;
+      }
+      await this.detachManagedPtyClient(terminal);
+    }
+
+    if (drainMs > 0 && attached.some((terminal) => terminal.pty)) {
+      await new Promise<void>((resolve) => setTimeout(resolve, drainMs));
+    }
+
+    for (const terminal of attached) {
+      if (terminal.pty) {
+        try {
+          terminal.pty.kill();
+        } catch {
+          // Process is already gone or cannot be signalled; shutdown continues.
+        }
+      }
+    }
   }
 }
 
@@ -863,6 +997,10 @@ export interface WsSink {
 export interface PipeRelayDeps {
   connect: (path: string) => Socket;
   resolvePipePath: (id: string, projectId?: string) => string | null;
+}
+
+export interface MuxWebSocketServer extends WebSocketServer {
+  shutdownGracefully?: (drainMs?: number) => Promise<void>;
 }
 
 /**
@@ -1418,5 +1556,9 @@ export function createMuxWebSocket(tmuxPath?: string | null): WebSocketServer | 
   });
 
   console.log("[MuxServer] Mux WebSocket server created (noServer mode)");
+  (wss as MuxWebSocketServer).shutdownGracefully = async (drainMs = PTY_SHUTDOWN_DRAIN_MS) => {
+    broadcaster.shutdown();
+    await terminalManager?.shutdownGracefully(drainMs);
+  };
   return wss;
 }
