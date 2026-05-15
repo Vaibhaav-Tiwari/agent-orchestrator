@@ -12,7 +12,13 @@
  * see ao-118 plan PR B).
  */
 
-import { isTerminalSession, loadConfig, recordActivityEvent } from "@aoagents/ao-core";
+import {
+  isTerminalSession,
+  loadConfig,
+  markDaemonShutdownHandlerInstalled,
+  recordActivityEvent,
+  sweepDaemonChildren,
+} from "@aoagents/ao-core";
 import { stopBunTmpJanitor } from "./bun-tmp-janitor.js";
 import { getSessionManager } from "./create-session-manager.js";
 import { stopAllLifecycleWorkers } from "./lifecycle-service.js";
@@ -36,6 +42,10 @@ export interface ShutdownContext {
 let handlersInstalled = false;
 let shuttingDown = false;
 
+export function isShutdownInProgress(): boolean {
+  return shuttingDown;
+}
+
 /**
  * Install SIGINT/SIGTERM handlers. Process-wide idempotent — calling
  * this more than once is a no-op. Only the first signal triggers
@@ -45,6 +55,7 @@ let shuttingDown = false;
 export function installShutdownHandlers(ctx: ShutdownContext): void {
   if (handlersInstalled) return;
   handlersInstalled = true;
+  markDaemonShutdownHandlerInstalled();
 
   const shutdown = (signal: NodeJS.Signals): void => {
     if (shuttingDown) return;
@@ -137,6 +148,7 @@ export function installShutdownHandlers(ctx: ShutdownContext): void {
           }
         }
 
+        await sweepDaemonChildren({ ownerPid: process.pid });
         await unregister();
         if (lastStopWriteError) {
           throw lastStopWriteError;

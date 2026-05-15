@@ -178,4 +178,56 @@ describe("ao update — activity events", () => {
       }),
     );
   });
+
+  it("emits cli.update_failed when npm registry lookup returns no version", async () => {
+    mockDetectInstallMethod.mockReturnValue("npm-global");
+    mockCheckForUpdate.mockResolvedValue({
+      currentVersion: "0.2.2",
+      latestVersion: null,
+      isOutdated: false,
+      installMethod: "npm-global" as const,
+      recommendedCommand: "npm install -g @aoagents/ao@latest",
+      checkedAt: null,
+    });
+
+    await expect(program.parseAsync(["node", "ao", "update"])).rejects.toThrow(
+      "process.exit(1)",
+    );
+
+    const events = recordedEvents();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "cli.update_failed",
+        source: "cli",
+        level: "error",
+        data: expect.objectContaining({
+          method: "npm-global",
+          reason: "registry_unreachable",
+        }),
+      }),
+    );
+  });
+
+  it("emits cli.update_failed when npm registry lookup throws", async () => {
+    mockDetectInstallMethod.mockReturnValue("npm-global");
+    mockCheckForUpdate.mockRejectedValue(new Error("registry timeout"));
+
+    await expect(program.parseAsync(["node", "ao", "update"])).rejects.toThrow(
+      "process.exit(1)",
+    );
+
+    const events = recordedEvents();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "cli.update_failed",
+        source: "cli",
+        level: "error",
+        data: expect.objectContaining({
+          method: "npm-global",
+          reason: "registry_lookup_threw",
+          errorMessage: "registry timeout",
+        }),
+      }),
+    );
+  });
 });

@@ -293,9 +293,34 @@ async function handleNpmUpdate(method: InstallMethod): Promise<void> {
   // would overwrite cache.channel before we can read it.
   const previousChannel = readCachedUpdateInfo(method)?.channel;
 
-  const info = await checkForUpdate({ force: true, channel });
+  let info: Awaited<ReturnType<typeof checkForUpdate>>;
+  try {
+    info = await checkForUpdate({ force: true, channel });
+  } catch (error) {
+    recordActivityEvent({
+      source: "cli",
+      kind: "cli.update_failed",
+      level: "error",
+      summary: `ao update (${method}) failed: npm registry lookup threw`,
+      data: {
+        method,
+        channel,
+        reason: "registry_lookup_threw",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      },
+    });
+    console.error(chalk.red("Could not reach npm registry. Check your network and try again."));
+    process.exit(1);
+  }
 
   if (!info.latestVersion) {
+    recordActivityEvent({
+      source: "cli",
+      kind: "cli.update_failed",
+      level: "error",
+      summary: `ao update (${method}) failed: npm registry lookup returned no version`,
+      data: { method, channel, reason: "registry_unreachable" },
+    });
     console.error(chalk.red("Could not reach npm registry. Check your network and try again."));
     process.exit(1);
   }
@@ -406,8 +431,8 @@ async function handleNpmUpdate(method: InstallMethod): Promise<void> {
       source: "cli",
       kind: "cli.update_failed",
       level: "error",
-      summary: `ao update (npm/pnpm) failed: install command exited non-zero`,
-      data: { method: "npm-global", command, exitCode },
+      summary: `ao update (${method}) failed: install command exited non-zero`,
+      data: { method, command, exitCode },
     });
     process.exit(exitCode);
   }

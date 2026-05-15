@@ -239,6 +239,7 @@ describe("ao stop — activity events", () => {
   });
 
   it("emits cli.stop_invoked at the start of the action", async () => {
+    const projectArg = "https://token@example.com/org/repo.git";
     // Force a fast failure so the action exits quickly after emitting stop_invoked.
     mockGetRunning.mockResolvedValue(null);
     // Make loadConfig throw so we hit the outer catch
@@ -263,13 +264,17 @@ describe("ao stop — activity events", () => {
     program.exitOverride();
     reloaded.registerStop(program);
 
-    await expect(program.parseAsync(["node", "ao", "stop"])).rejects.toThrow();
+    await expect(program.parseAsync(["node", "ao", "stop", projectArg])).rejects.toThrow();
 
     const events = recordedEvents();
     expect(events).toContainEqual(
       expect.objectContaining({
         kind: "cli.stop_invoked",
         source: "cli",
+        summary: "ao stop invoked",
+        data: expect.objectContaining({
+          projectArg,
+        }),
       }),
     );
 
@@ -525,6 +530,7 @@ describe("ao start — activity events (failure paths)", () => {
   });
 
   it("emits cli.start_failed with reason 'outer' when resolveOrCreateProject throws", async () => {
+    const projectArg = "https://token@example.com/org/repo.git";
     const resolveProjectMod = await import("../../src/lib/resolve-project.js");
     vi.mocked(resolveProjectMod.resolveOrCreateProject).mockRejectedValue(
       new Error("project resolution exploded"),
@@ -533,7 +539,7 @@ describe("ao start — activity events (failure paths)", () => {
     const program = buildProgram();
 
     try {
-      await program.parseAsync(["node", "ao", "start"]);
+      await program.parseAsync(["node", "ao", "start", projectArg]);
     } catch {
       // process.exit(1) throws in the spy
     }
@@ -544,8 +550,9 @@ describe("ao start — activity events (failure paths)", () => {
         kind: "cli.start_invoked",
         source: "cli",
         level: "info",
+        summary: "ao start invoked",
         data: expect.objectContaining({
-          projectArg: null,
+          projectArg,
         }),
       }),
     );

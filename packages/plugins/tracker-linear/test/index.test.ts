@@ -136,6 +136,40 @@ function mockHTTPError(statusCode: number, body: string) {
   );
 }
 
+/** Queue a request-level network error before Linear returns a response. */
+function mockRequestError(message: string) {
+  requestMock.mockImplementationOnce(() => {
+    const req = Object.assign(new EventEmitter(), {
+      write: vi.fn(),
+      end: vi.fn(() => {
+        process.nextTick(() => req.emit("error", new Error(message)));
+      }),
+      destroy: vi.fn(),
+      setTimeout: vi.fn(),
+    });
+    return req;
+  });
+}
+
+/** Queue a client-side timeout before Linear returns a response. */
+function mockRequestTimeout() {
+  requestMock.mockImplementationOnce(() => {
+    let timeoutHandler: (() => void) | undefined;
+    const req = Object.assign(new EventEmitter(), {
+      write: vi.fn(),
+      end: vi.fn(() => {
+        process.nextTick(() => timeoutHandler?.());
+      }),
+      destroy: vi.fn(),
+      setTimeout: vi.fn((_ms: number, handler: () => void) => {
+        timeoutHandler = handler;
+        return req;
+      }),
+    });
+    return req;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -279,6 +313,26 @@ describe("tracker-linear plugin", () => {
 
     it("retries transient HTTP errors", async () => {
       mockHTTPError(502, "Bad Gateway");
+      mockLinearAPI({ issue: sampleIssueNode });
+
+      const issue = await tracker.getIssue("INT-123", project);
+
+      expect(issue.id).toBe("INT-123");
+      expect(requestMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries request-level network errors", async () => {
+      mockRequestError("ECONNRESET");
+      mockLinearAPI({ issue: sampleIssueNode });
+
+      const issue = await tracker.getIssue("INT-123", project);
+
+      expect(issue.id).toBe("INT-123");
+      expect(requestMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries client-side request timeouts", async () => {
+      mockRequestTimeout();
       mockLinearAPI({ issue: sampleIssueNode });
 
       const issue = await tracker.getIssue("INT-123", project);

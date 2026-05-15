@@ -51,8 +51,19 @@ class LinearHttpError extends Error {
   }
 }
 
+class LinearNetworkError extends Error {
+  constructor(message: string) {
+    super(`Linear API network error: ${message}`);
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableDirectTransportError(err: unknown): boolean {
+  if (err instanceof LinearHttpError) return err.transient;
+  return err instanceof LinearNetworkError;
 }
 
 function getApiKey(): string {
@@ -99,7 +110,9 @@ function createDirectTransport(): GraphQLTransport {
           },
           (res) => {
             const chunks: Buffer[] = [];
-            res.on("error", (err: Error) => settle(() => reject(err)));
+            res.on("error", (err: Error) =>
+              settle(() => reject(new LinearNetworkError(err.message))),
+            );
             res.on("data", (chunk: Buffer) => chunks.push(chunk));
             res.on("end", () => {
               settle(() => {
@@ -131,11 +144,11 @@ function createDirectTransport(): GraphQLTransport {
         req.setTimeout(30_000, () => {
           settle(() => {
             req.destroy();
-            reject(new Error("Linear API request timed out after 30s"));
+            reject(new LinearHttpError(408, "client-side timeout after 30s"));
           });
         });
 
-        req.on("error", (err) => settle(() => reject(err)));
+        req.on("error", (err) => settle(() => reject(new LinearNetworkError(err.message))));
         req.write(body);
         req.end();
       });
@@ -145,9 +158,7 @@ function createDirectTransport(): GraphQLTransport {
         return await execute();
       } catch (err) {
         const shouldRetry =
-          err instanceof LinearHttpError &&
-          err.transient &&
-          attempt < DIRECT_TRANSPORT_MAX_ATTEMPTS;
+          isRetryableDirectTransportError(err) && attempt < DIRECT_TRANSPORT_MAX_ATTEMPTS;
         if (!shouldRetry) throw err;
         await sleep(DIRECT_TRANSPORT_RETRY_DELAY_MS * attempt);
       }

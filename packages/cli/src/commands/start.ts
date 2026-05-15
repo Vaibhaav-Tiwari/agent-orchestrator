@@ -9,7 +9,7 @@
  * (or equivalent flag) at launch time — no file writing required.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, basename, dirname } from "node:path";
 import { cwd } from "node:process";
@@ -27,6 +27,8 @@ import {
   isTerminalSession,
   getDefaultRuntime,
   isWindows,
+  isMac,
+  isLinux,
   findPidByPort,
   killProcessTree,
   loadLocalProjectConfigDetailed,
@@ -38,9 +40,15 @@ import {
   type ProjectConfig,
   type ParsedRepoUrl,
   writeLocalProjectConfig,
+  spawnManagedDaemonChild,
+  sweepDaemonChildren,
+  scanAoOrphans,
+  reapAoOrphans,
+  type DaemonChildSweepResult,
+  type AoOrphanProcess,
 } from "@aoagents/ao-core";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
-import { exec, execSilent, forwardSignalsToChild, git } from "../lib/shell.js";
+import { exec, execSilent, git } from "../lib/shell.js";
 import { getSessionManager } from "../lib/create-session-manager.js";
 import { listLifecycleWorkers } from "../lib/lifecycle-service.js";
 import { startBunTmpJanitor } from "../lib/bun-tmp-janitor.js";
@@ -97,7 +105,7 @@ import {
   tryInstallWithAttempts,
 } from "../lib/install-helpers.js";
 import { ensureGit, runtimePreflight } from "../lib/startup-preflight.js";
-import { installShutdownHandlers } from "../lib/shutdown.js";
+import { installShutdownHandlers, isShutdownInProgress } from "../lib/shutdown.js";
 import { resolveOrCreateProject } from "../lib/resolve-project.js";
 import { pathsEqual } from "../lib/path-equality.js";
 import { maybePromptForUpdateChannel } from "../lib/update-channel-onboarding.js";
@@ -318,10 +326,10 @@ async function promptAgentSelection(): Promise<{
 }
 
 function ghInstallAttempts(): InstallAttempt[] {
-  if (process.platform === "darwin") {
+  if (isMac()) {
     return [{ cmd: "brew", args: ["install", "gh"], label: "brew install gh" }];
   }
-  if (process.platform === "linux") {
+  if (isLinux()) {
     return [
       {
         cmd: "sudo",
@@ -582,6 +590,19 @@ export async function autoCreateConfig(workingDir: string): Promise<Orchestrator
 
   console.log(chalk.green(`✓ Config created: ${outputPath}\n`));
 
+  try {
+    const registeredProjectId = registerProjectInGlobalConfig(projectId, projectId, path, {
+      ...(repo ? { repo } : {}),
+      defaultBranch,
+      sessionPrefix: generateSessionPrefix(projectId),
+    });
+    console.log(chalk.green(`✓ Registered "${registeredProjectId}" in global config\n`));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(chalk.yellow("⚠ Could not register project in global config."));
+    console.log(chalk.dim(`  ${message}\n`));
+  }
+
   if (!repo) {
     console.log(
       chalk.yellow("⚠ No repo configured — issue tracking and PR features will be unavailable."),
@@ -798,7 +819,7 @@ async function startDashboard(
   if (useDevServer) {
     // Monorepo with --dev: use pnpm run dev (tsx watch, HMR, etc.)
     console.log(chalk.dim("  Mode: development (HMR enabled)"));
-    child = spawn("pnpm", ["run", "dev"], {
+    child = spawnManagedDaemonChild("dashboard", "pnpm", ["run", "dev"], {
       cwd: webDir,
       stdio: "inherit",
       detached: !isWindows(),
@@ -811,7 +832,7 @@ async function startDashboard(
       console.log(chalk.dim("  Tip: use --dev for hot reload when editing dashboard UI\n"));
     }
     const startScript = resolve(webDir, "dist-server", "start-all.js");
-    child = spawn("node", [startScript], {
+    child = spawnManagedDaemonChild("dashboard", "node", [startScript], {
       cwd: webDir,
       stdio: "inherit",
       detached: !isWindows(),
@@ -853,6 +874,11 @@ async function runStartup(
   // feature ships. No-op on subsequent runs (idempotent — guarded by the
   // presence of `updateChannel` in the global config).
   await maybePromptForUpdateChannel();
+
+  // Install the parent shutdown path before spawning any managed children.
+  // This guarantees a SIGINT/SIGTERM in the middle of startup still performs
+  // the full AO cleanup instead of relying on Node's default signal exit.
+  installShutdownHandlers({ configPath: config.configPath, projectId });
 
   const shouldStartLifecycle = opts?.dashboard !== false || opts?.orchestrator !== false;
   let port = config.port ?? DEFAULT_PORT;
@@ -1181,35 +1207,9 @@ async function runStartup(
 
   // Keep dashboard process alive if it was started
   if (dashboardProcess) {
-    const pid = dashboardProcess.pid;
-
-    // On Unix the dashboard is spawned with detached:true (own process group)
-    // so Ctrl+C only reaches AO's process group, not the dashboard's. Forward
-    // SIGINT/SIGTERM so the dashboard group is also cleaned up on exit.
-    // On Windows, detached:false keeps child in the same console —
-    // Ctrl+C reaches both processes. No signal forwarding needed.
-    if (!isWindows() && pid) {
-      forwardSignalsToChild(pid, dashboardProcess);
-    }
-
-    // Also kill the dashboard child when the parent exits for any reason
-    // (normal exit path after lifecycle flush). The `exit` event is
-    // synchronous and fires regardless of platform, so it covers the cases
-    // where forwardSignalsToChild doesn't (Windows, or non-signal exits).
-    /* c8 ignore start -- exit handler only fires on process termination */
-    const killDashboardChild = (): void => {
-      try {
-        dashboardProcess?.kill("SIGTERM");
-      } catch {
-        // already dead
-      }
-    };
-    /* c8 ignore stop */
-    process.on("exit", killDashboardChild);
-
     dashboardProcess.on("exit", (code) => {
-      process.removeListener("exit", killDashboardChild);
       if (openAbort) openAbort.abort();
+      if (isShutdownInProgress()) return;
       if (code !== 0 && code !== null) {
         console.error(chalk.red(`Dashboard exited with code ${code}`));
       }
@@ -1276,6 +1276,60 @@ async function stopDashboard(port: number): Promise<void> {
   }
 
   console.log(chalk.yellow("Could not stop dashboard (may not be running)"));
+}
+
+function formatSweepSummary(result: DaemonChildSweepResult): string {
+  return `${result.terminated} graceful, ${result.forceKilled} force-killed${
+    result.failed > 0 ? `, ${result.failed} failed` : ""
+  }`;
+}
+
+async function sweepRegisteredDaemonChildren(ownerPid?: number): Promise<void> {
+  const result = await sweepDaemonChildren({ ownerPid });
+  if (result.attempted > 0) {
+    console.log(
+      chalk.dim(
+        `  Swept ${result.attempted} registered daemon child(ren): ${formatSweepSummary(result)}`,
+      ),
+    );
+  }
+}
+
+function describeAoOrphans(orphans: AoOrphanProcess[]): string {
+  return orphans
+    .map((orphan) => `${orphan.pid} (${orphan.role})`)
+    .slice(0, 8)
+    .join(", ");
+}
+
+async function maybeSweepAoOrphansOnStart(reapOrphans: boolean | undefined): Promise<void> {
+  const orphans = await scanAoOrphans();
+  if (orphans.length === 0) return;
+
+  if (!reapOrphans && isHumanCaller()) {
+    console.log(
+      chalk.yellow(
+        `\n  Found ${orphans.length} orphaned AO child process(es): ${describeAoOrphans(orphans)}`,
+      ),
+    );
+    reapOrphans = await promptConfirm("Kill orphaned AO child processes before starting?", true);
+  }
+
+  if (!reapOrphans) {
+    console.log(
+      chalk.yellow(
+        `  Found ${orphans.length} orphaned AO child process(es). Run \`ao start --reap-orphans\` to clean them up.`,
+      ),
+    );
+    return;
+  }
+
+  const result = await reapAoOrphans(orphans);
+  console.log(
+    chalk.green(
+      `  Reaped ${result.attempted} orphaned AO child process(es): ${formatSweepSummary(result)}`,
+    ),
+  );
 }
 
 /**
@@ -1364,6 +1418,7 @@ export function registerStart(program: Command): void {
     .option("--rebuild", "Clean and rebuild dashboard before starting")
     .option("--dev", "Use Next.js dev server with hot reload (for dashboard UI development)")
     .option("--interactive", "Prompt to configure config settings")
+    .option("--reap-orphans", "Kill orphaned AO child processes before starting")
     .action(
       async (
         projectArg?: string,
@@ -1373,13 +1428,14 @@ export function registerStart(program: Command): void {
           rebuild?: boolean;
           dev?: boolean;
           interactive?: boolean;
+          reapOrphans?: boolean;
         },
       ) => {
         recordActivityEvent({
           source: "cli",
           kind: "cli.start_invoked",
           level: "info",
-          summary: `ao start invoked${projectArg ? ` for ${projectArg}` : ""}`,
+          summary: "ao start invoked",
           data: {
             projectArg: projectArg ?? null,
             dashboard: opts?.dashboard !== false,
@@ -1400,6 +1456,7 @@ export function registerStart(program: Command): void {
 
         try {
           releaseStartupLock = await acquireStartupLock();
+          await maybeSweepAoOrphansOnStart(opts?.reapOrphans);
           let config: OrchestratorConfig;
           let projectId: string;
           let project: ProjectConfig;
@@ -1684,9 +1741,7 @@ export function registerStart(program: Command): void {
           });
 
           // Ctrl+C and `ao stop` (which sends SIGTERM) perform a full
-          // graceful shutdown: kill sessions, record last-stop state for
-          // restore, unregister, then exit. See lib/shutdown.ts.
-          installShutdownHandlers({ configPath: config.configPath, projectId });
+          // graceful shutdown via the handler installed inside runStartup().
         } catch (err) {
           recordActivityEvent({
             source: "cli",
@@ -1773,7 +1828,7 @@ export function registerStop(program: Command): void {
         source: "cli",
         kind: "cli.stop_invoked",
         level: "info",
-        summary: `ao stop invoked${projectArg ? ` for ${projectArg}` : ""}`,
+        summary: "ao stop invoked",
         data: {
           projectArg: projectArg ?? null,
           all: opts.all === true,
@@ -1793,6 +1848,7 @@ export function registerStop(program: Command): void {
             // protocol so node-pty disposes ConPTY gracefully (avoids WER
             // 0x800700e8). No-op on non-Windows.
             await sweepWindowsPtyHostsBeforeParentKill();
+            await sweepRegisteredDaemonChildren(running.pid);
             // killProcessTree handles process trees on Windows (taskkill /T /F)
             // and process groups on Unix; it swallows "already dead" internally.
             await killProcessTree(running.pid, "SIGTERM");
@@ -1975,6 +2031,7 @@ export function registerStop(program: Command): void {
             // protocol so node-pty disposes ConPTY gracefully (avoids WER
             // 0x800700e8). No-op on non-Windows.
             await sweepWindowsPtyHostsBeforeParentKill();
+            await sweepRegisteredDaemonChildren(running.pid);
             try {
               await killProcessTree(running.pid, "SIGTERM");
               recordActivityEvent({
@@ -1999,6 +2056,8 @@ export function registerStop(program: Command): void {
               });
             }
             await unregister();
+          } else {
+            await sweepRegisteredDaemonChildren();
           }
           await stopDashboard(running?.port ?? port);
         }
