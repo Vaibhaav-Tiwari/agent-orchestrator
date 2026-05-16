@@ -381,10 +381,14 @@ export function emptyEngineState(): EngineState {
  * only place that touches the pipeline store and session manager, so builtin
  * executors stay testable as pure functions over their context.
  *
- * v1.2 covers the three capabilities the spec calls out:
+ * v1.2 exposes the two capabilities the spec calls out:
  *   - read findings from sibling stages (router + compose)
  *   - send a payload to a target session (router)
- *   - write artifacts back into the pipeline store (compose)
+ *
+ * Artifacts are NOT written through this context. Builtins return their
+ * artifacts in `BuiltinOutcome.artifacts` and the engine persists them via
+ * its normal `STAGE_COMPLETED → APPEND_ARTIFACTS` path, which keeps a single
+ * write path (the reducer) authoritative for the pipeline store.
  *
  * The context is intentionally narrow: builtins must not need access to the
  * full SessionManager or PipelineStore. If a builtin needs a capability not

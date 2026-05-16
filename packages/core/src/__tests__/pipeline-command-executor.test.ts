@@ -1,13 +1,16 @@
 /**
  * Tests for the command executor — shell-based pipeline stages.
  *
- * The executor is exercised against real subprocesses via /bin/sh -c so we
- * cover the actual spawn → stdout-capture → JSONL-parse path end-to-end.
- * Fork-PR refusal and executor-kind guards run in-process with no subprocess.
+ * Subprocess-bearing tests use `/bin/sh -c` with POSIX shell syntax and are
+ * skipped on Windows; the executor itself is cross-platform (Windows users
+ * point `executor.command` at `pwsh.exe` or a `.cmd` shim — `spawn(shell:
+ * true)` handles the latter). Guard / refusal / kind-mismatch tests are
+ * platform-neutral and run everywhere.
  */
 
 import { describe, expect, it, vi } from "vitest";
 
+import { isWindows } from "../platform.js";
 import {
   asRunId,
   asStageRunId,
@@ -16,6 +19,8 @@ import {
   type CommandStartInput,
   type Stage,
 } from "../pipeline/index.js";
+
+const posixDescribe = isWindows() ? describe.skip : describe;
 
 function makeCommandStage(overrides: Partial<Stage> = {}): Stage {
   return {
@@ -38,7 +43,8 @@ function makeInput(overrides: Partial<CommandStartInput> = {}): CommandStartInpu
   };
 }
 
-describe("command executor — guards", () => {
+// Platform-neutral guards: never spawn a subprocess.
+describe("command executor — guards (cross-platform)", () => {
   it("rejects non-command stages with a typed failure", async () => {
     const exec = createCommandExecutor();
     const outcome = await exec.run(
@@ -56,6 +62,8 @@ describe("command executor — guards", () => {
   it("refuses to run a fork PR when stage.allowFork is unset", async () => {
     const onRefuse = vi.fn();
     const exec = createCommandExecutor({ onRefuse });
+    // Fork refusal short-circuits BEFORE spawn — never executes the shell,
+    // so the command string need not be cross-platform.
     const stage = makeCommandStage({
       executor: {
         kind: "command",
@@ -85,7 +93,10 @@ describe("command executor — guards", () => {
     if (outcome.status !== "failed") throw new Error("unreachable");
     expect(outcome.refused).toBe(true);
   });
+});
 
+// Subprocess-bearing tests use /bin/sh and POSIX shell syntax: skip on Windows.
+posixDescribe("command executor — guards (POSIX subprocess)", () => {
   it("runs a fork PR when stage.allowFork is explicitly true", async () => {
     const exec = createCommandExecutor();
     const stage = makeCommandStage({
@@ -106,7 +117,7 @@ describe("command executor — guards", () => {
   });
 });
 
-describe("command executor — stdout findings", () => {
+posixDescribe("command executor — stdout findings", () => {
   it("parses JSONL stdout into ArtifactInput records", async () => {
     const exec = createCommandExecutor();
     const finding = {
@@ -221,7 +232,7 @@ describe("command executor — stdout findings", () => {
   });
 });
 
-describe("command executor — environment", () => {
+posixDescribe("command executor — environment", () => {
   it("threads AO_PIPELINE_* env vars into the child process", async () => {
     const exec = createCommandExecutor();
     const stage = makeCommandStage({
@@ -264,5 +275,51 @@ describe("command executor — environment", () => {
     expect(outcome.status).toBe("completed");
     if (outcome.status !== "completed") throw new Error("unreachable");
     expect(outcome.artifacts[0]).toMatchObject({ kind: "json", data: { v: "from-stage" } });
+  });
+});
+
+posixDescribe("command executor — timeout enforcement", () => {
+  it("kills a stage that exceeds Stage.timeoutMs and reports the timeout", async () => {
+    const exec = createCommandExecutor();
+    const stage = makeCommandStage({
+      timeoutMs: 100,
+      executor: {
+        kind: "command",
+        command: "/bin/sh",
+        args: ["-c", "sleep 30"],
+      },
+    });
+
+    const outcome = await exec.run(makeInput({ stage }));
+
+    expect(outcome.status).toBe("failed");
+    if (outcome.status !== "failed") throw new Error("unreachable");
+    expect(outcome.errorMessage).toContain("timed out after 100ms");
+  });
+
+  it("respects defaultTimeoutMs when Stage.timeoutMs is unset", async () => {
+    const exec = createCommandExecutor({ defaultTimeoutMs: 100 });
+    const stage = makeCommandStage({
+      executor: {
+        kind: "command",
+        command: "/bin/sh",
+        args: ["-c", "sleep 30"],
+      },
+    });
+
+    const outcome = await exec.run(makeInput({ stage }));
+
+    expect(outcome.status).toBe("failed");
+    if (outcome.status !== "failed") throw new Error("unreachable");
+    expect(outcome.errorMessage).toContain("timed out after 100ms");
+  });
+
+  it("does not time out a fast stage that completes before the deadline", async () => {
+    const exec = createCommandExecutor({ defaultTimeoutMs: 30_000 });
+    const stage = makeCommandStage({
+      executor: { kind: "command", command: "/bin/sh", args: ["-c", "true"] },
+    });
+    const outcome = await exec.run(makeInput({ stage }));
+    expect(outcome.status).toBe("completed");
   });
 });

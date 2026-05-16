@@ -30,6 +30,7 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 
+import { isWindows, killProcessTree } from "../../platform.js";
 import {
   type ArtifactInput,
   type RunId,
@@ -72,10 +73,19 @@ export interface CommandStageExecutor {
   run(input: CommandStartInput): Promise<CommandOutcome>;
 }
 
-/** Default millisecond cap on a single command stage. Engine override TBD. */
+/**
+ * Default millisecond cap on a single command stage. Overridable per-stage
+ * via `Stage.timeoutMs`, and per-engine via `CommandExecutorDeps.defaultTimeoutMs`.
+ */
 export const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 /** Default cap on stdout bytes; protects the engine from misbehaving scripts. */
 export const DEFAULT_COMMAND_STDOUT_CAP_BYTES = 4 * 1024 * 1024;
+/**
+ * Grace period between SIGTERM and SIGKILL when a stage times out. Long
+ * enough for a well-behaved child to flush stdout/stderr, short enough that
+ * the pipeline still recovers in bounded time.
+ */
+export const COMMAND_KILL_GRACE_MS = 2_000;
 
 /** Format the fork-refusal error message — exposed so engine logs match. */
 export function formatForkRefusalMessage(stageName: string): string {
@@ -91,8 +101,13 @@ export interface CommandExecutorDeps {
    * stream so the refusal appears in pipeline logs. Default: no-op.
    */
   onRefuse?(stage: Stage, message: string): void;
-  /** Override clock for tests. */
+  /** Override clock for tests. Used for deadline math; never read inside the run loop itself. */
   now?(): number;
+  /**
+   * Engine-wide fallback timeout for command stages that don't set
+   * `Stage.timeoutMs`. Defaults to {@link DEFAULT_COMMAND_TIMEOUT_MS}.
+   */
+  defaultTimeoutMs?: number;
   /** Process spawner — defaults to node:child_process.spawn. Override for tests. */
   spawnFn?: typeof spawn;
 }
@@ -100,6 +115,8 @@ export interface CommandExecutorDeps {
 export function createCommandExecutor(deps: CommandExecutorDeps = {}): CommandStageExecutor {
   const onRefuse = deps.onRefuse ?? (() => undefined);
   const spawnFn = deps.spawnFn ?? spawn;
+  const now = deps.now ?? Date.now;
+  const defaultTimeoutMs = deps.defaultTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
 
   return {
     run(input: CommandStartInput): Promise<CommandOutcome> {
@@ -122,6 +139,8 @@ export function createCommandExecutor(deps: CommandExecutorDeps = {}): CommandSt
       const cwd = executor.cwd ? join(workspaceRoot, executor.cwd) : workspaceRoot;
       const env = buildChildEnv(input, executor.env);
       const stdoutCap = DEFAULT_COMMAND_STDOUT_CAP_BYTES;
+      const timeoutMs = stage.timeoutMs ?? defaultTimeoutMs;
+      const startedAt = now();
 
       return new Promise<CommandOutcome>((resolve) => {
         let child;
@@ -130,6 +149,16 @@ export function createCommandExecutor(deps: CommandExecutorDeps = {}): CommandSt
             cwd,
             env,
             stdio: ["ignore", "pipe", "pipe"],
+            // Windows installs node-based CLIs as `.cmd` shims that `spawn`
+            // can't resolve without going through cmd.exe. See
+            // docs/CROSS_PLATFORM.md.
+            shell: isWindows(),
+            // Detach the child into its own process group on Unix so a
+            // timeout kill can reach grandchildren (e.g. `sh -c 'sleep 30'`
+            // — without a group kill, sleep inherits the stdio pipes and
+            // `close` never fires). No effect on Windows; taskkill /T
+            // walks the tree by PID.
+            detached: !isWindows(),
           });
         } catch (err) {
           resolve({
@@ -146,12 +175,42 @@ export function createCommandExecutor(deps: CommandExecutorDeps = {}): CommandSt
         let stdoutBytes = 0;
         let truncated = false;
         let settled = false;
+        let timedOut = false;
+        let killTimer: NodeJS.Timeout | null = null;
+        let forceTimer: NodeJS.Timeout | null = null;
+
+        const clearTimers = () => {
+          if (killTimer) clearTimeout(killTimer);
+          if (forceTimer) clearTimeout(forceTimer);
+          killTimer = null;
+          forceTimer = null;
+        };
 
         const settle = (outcome: CommandOutcome) => {
           if (settled) return;
           settled = true;
+          clearTimers();
           resolve(outcome);
         };
+
+        if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
+          killTimer = setTimeout(() => {
+            if (settled) return;
+            timedOut = true;
+            // Best-effort graceful shutdown of the whole process tree,
+            // escalating to SIGKILL after a short grace window so a wedged
+            // child (or shell grandchild) can't hold the pipeline. Fire and
+            // forget — `close` resolves the outer promise.
+            if (child.pid !== undefined) {
+              void killProcessTree(child.pid, "SIGTERM");
+            }
+            forceTimer = setTimeout(() => {
+              if (child.pid !== undefined) {
+                void killProcessTree(child.pid, "SIGKILL");
+              }
+            }, COMMAND_KILL_GRACE_MS);
+          }, timeoutMs);
+        }
 
         child.stdout?.on("data", (chunk: Buffer) => {
           stdoutBytes += chunk.length;
@@ -177,6 +236,14 @@ export function createCommandExecutor(deps: CommandExecutorDeps = {}): CommandSt
         });
         child.on("close", (code, signal) => {
           const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+          if (timedOut) {
+            const elapsed = now() - startedAt;
+            settle({
+              status: "failed",
+              errorMessage: `command "${executor.command}" timed out after ${timeoutMs}ms (ran for ${elapsed}ms)${stderr ? `: ${stderr}` : ""}`,
+            });
+            return;
+          }
           if (truncated) {
             settle({
               status: "failed",

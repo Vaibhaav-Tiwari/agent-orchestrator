@@ -11,6 +11,11 @@
  *   - Compose stage merges two upstream stages into a single composite.
  *
  * Agent executor is mocked so we can drive the engine without sessions.
+ *
+ * Tests spawn real subprocesses via `/bin/sh -c` with POSIX syntax. The
+ * whole file is gated on POSIX hosts; the no-subprocess executor unit
+ * tests in pipeline-command-executor.test.ts cover the cross-platform
+ * surface (guards, fork refusal, kind mismatch).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -19,6 +24,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { isWindows } from "../platform.js";
 import {
   asPipelineId,
   createBuiltinComposeExecutor,
@@ -36,6 +42,8 @@ import {
 } from "../pipeline/index.js";
 import { createPluginRegistry } from "../plugin-registry.js";
 import type { Agent, PluginManifest, PluginModule } from "../types.js";
+
+const posixDescribe = isWindows() ? describe.skip : describe;
 
 let storeRoot: string;
 
@@ -103,7 +111,7 @@ function makeCommandStage(name: string, command: string, overrides: Partial<Stag
   };
 }
 
-describe("engine + command executor", () => {
+posixDescribe("engine + command executor", () => {
   it("runs a command stage to completion and persists its findings", async () => {
     const registry = createPluginRegistry();
     registry.register(makeAgentPlugin());
@@ -218,7 +226,7 @@ describe("engine + command executor", () => {
   });
 });
 
-describe("engine + builtin/router", () => {
+posixDescribe("engine + builtin/router", () => {
   it("delivers upstream findings to a target session via sendToSession", async () => {
     const registry = createPluginRegistry();
     registry.register(makeAgentPlugin());
@@ -331,7 +339,7 @@ describe("engine + builtin/router", () => {
   });
 });
 
-describe("engine + builtin/compose", () => {
+posixDescribe("engine + builtin/compose", () => {
   it("merges findings from two upstream stages into a single composite artifact", async () => {
     const registry = createPluginRegistry();
     registry.register(makeAgentPlugin());
@@ -413,7 +421,7 @@ describe("engine + builtin/compose", () => {
   });
 });
 
-describe("engine + builtin executors — guardrails", () => {
+posixDescribe("engine + builtin executors — guardrails", () => {
   it("fails a builtin/router stage when sendToSession is not configured", async () => {
     const registry = createPluginRegistry();
     registry.register(makeAgentPlugin());
