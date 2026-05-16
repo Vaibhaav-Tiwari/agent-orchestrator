@@ -45,6 +45,7 @@ export {
   isLegacyRoutePredicate,
   normalizeRoutePredicate,
   predicateDepth,
+  validateRoutePredicateScope,
   type PredicateContext,
 } from "./predicate.js";
 

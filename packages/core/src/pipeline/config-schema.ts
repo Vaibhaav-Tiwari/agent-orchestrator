@@ -18,6 +18,7 @@ import {
   MAX_PREDICATE_DEPTH,
   PredicateSchema,
   predicateDepth,
+  validateRoutePredicateScope,
 } from "./predicate.js";
 import {
   asPipelineId,
@@ -211,6 +212,20 @@ export const ConfiguredPipelineSchema = z
               });
             }
           }
+        }
+        // Routes-only constraint: every DSL leaf must declare an explicit
+        // `stages` scope. An unset-scope leaf would evaluate over "all
+        // stages" at trigger time, find the host stage still `pending`, and
+        // immediately cascade-skip it. Legacy shapes already require
+        // `stages` at the schema level.
+        for (const problem of validateRoutePredicateScope(
+          routes.when as StageRoutePredicate | Predicate,
+        )) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["stages", i, "routes", "when"],
+            message: `Stage "${stage.name}" routes.when: ${problem}.`,
+          });
         }
       }
 

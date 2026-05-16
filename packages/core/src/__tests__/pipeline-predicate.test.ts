@@ -17,6 +17,7 @@ import {
   asRunId,
   asStageRunId,
   collectReferencedStages,
+  ConfiguredPipelineSchema,
   evaluateExitPredicates,
   evaluatePredicate,
   fromLegacyRoutePredicate,
@@ -24,6 +25,7 @@ import {
   normalizeRoutePredicate,
   predicateDepth,
   PredicateSchema,
+  validateRoutePredicateScope,
   type Artifact,
   type Predicate,
   type PredicateContext,
@@ -137,6 +139,14 @@ describe("PredicateSchema — parser", () => {
         },
       }),
     ).toBe(2);
+  });
+
+  it("predicateDepth returns 0 (not -Infinity) on a programmatically-empty combinator", () => {
+    // Schema rejects `predicates: []` via `.min(1)`, but the TS type permits
+    // it. `Math.max(...[])` is -Infinity; guarding the empty case keeps the
+    // depth-cap check (`depth > MAX_PREDICATE_DEPTH`) sane.
+    expect(predicateDepth({ kind: "and", predicates: [] })).toBe(0);
+    expect(predicateDepth({ kind: "or", predicates: [] })).toBe(0);
   });
 });
 
@@ -360,6 +370,148 @@ describe("Legacy route predicate bridge", () => {
       stages: ["a", "b", "c"],
     });
     expect(evaluatePredicate(pred, ctx(stages))).toBe(false);
+  });
+
+  it("allSucceeded ignores verdict (v1.1 status-only contract)", () => {
+    // v1.1's evaluator never consulted verdict — only `status === "succeeded"`.
+    // The new DSL `all_pass` leaf prefers verdict over status when set. The
+    // legacy bridge must preserve v1.1 semantics so a stage that sets a
+    // non-"pass" verdict on a succeeded stage doesn't silently break existing
+    // route configs.
+    const stages = {
+      a: makeStageState("a", { status: "succeeded", verdict: "neutral" }),
+      b: makeStageState("b", { status: "succeeded", verdict: "fail" }),
+    };
+    const legacy = fromLegacyRoutePredicate({ kind: "allSucceeded", stages: ["a", "b"] });
+    expect(evaluatePredicate(legacy, ctx(stages))).toBe(true);
+
+    // Direct (non-legacy) `all_pass` still consults verdict, matching the new
+    // DSL's documented semantics.
+    const dsl: Predicate = { kind: "all_pass", stages: ["a"] };
+    expect(evaluatePredicate(dsl, ctx(stages))).toBe(false);
+  });
+
+  it("anySucceeded ignores verdict (v1.1 status-only contract)", () => {
+    const stages = {
+      a: makeStageState("a", { status: "succeeded", verdict: "fail" }),
+      b: makeStageState("b", { status: "failed" }),
+    };
+    const legacy = fromLegacyRoutePredicate({ kind: "anySucceeded", stages: ["a", "b"] });
+    // a is status=succeeded (with verdict=fail). v1.1's anySucceeded fires
+    // on status alone → true. The bridge must preserve that.
+    expect(evaluatePredicate(legacy, ctx(stages))).toBe(true);
+  });
+});
+
+describe("validateRoutePredicateScope", () => {
+  it("accepts predicates with explicit, non-empty stages on every leaf", () => {
+    expect(validateRoutePredicateScope({ kind: "all_pass", stages: ["a"] })).toEqual([]);
+    expect(
+      validateRoutePredicateScope({
+        kind: "and",
+        predicates: [
+          { kind: "all_pass", stages: ["a"] },
+          { kind: "no_open_findings", stages: ["b"] },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects leaves with no stages scope", () => {
+    expect(validateRoutePredicateScope({ kind: "all_pass" })).toHaveLength(1);
+    expect(validateRoutePredicateScope({ kind: "no_open_findings" })).toHaveLength(1);
+    expect(validateRoutePredicateScope({ kind: "finding_count_below", n: 3 })).toHaveLength(1);
+  });
+
+  it("rejects leaves with empty stages array", () => {
+    expect(validateRoutePredicateScope({ kind: "all_pass", stages: [] })).toHaveLength(1);
+  });
+
+  it("walks transitively into and/or/not", () => {
+    const problems = validateRoutePredicateScope({
+      kind: "and",
+      predicates: [
+        { kind: "all_pass", stages: ["a"] },
+        { kind: "not", predicate: { kind: "no_open_findings" } },
+      ],
+    });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("no_open_findings");
+  });
+
+  it("legacy route predicates always pass (schema enforces min(1) stages)", () => {
+    expect(validateRoutePredicateScope({ kind: "allSucceeded", stages: ["a"] })).toEqual([]);
+  });
+});
+
+describe("ConfiguredPipelineSchema — routes.when scope enforcement", () => {
+  const baseStage = {
+    name: "review",
+    trigger: { on: ["pr.opened"] },
+    executor: { kind: "agent", plugin: "codex", mode: "review" },
+    task: { prompt: "x" },
+  };
+
+  it("accepts a DSL route with an explicit stages scope", () => {
+    const result = ConfiguredPipelineSchema.safeParse({
+      stages: [
+        baseStage,
+        {
+          ...baseStage,
+          name: "fix",
+          routes: { when: { kind: "all_pass", stages: ["review"] } },
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a DSL route leaf with no stages scope", () => {
+    // The schema accepts this shape syntactically, but the superRefine
+    // guard fails it — an unscoped leaf would evaluate over "all stages"
+    // at trigger time, find the host stage pending, and immediately skip.
+    const result = ConfiguredPipelineSchema.safeParse({
+      stages: [
+        baseStage,
+        { ...baseStage, name: "fix", routes: { when: { kind: "no_open_findings" } } },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues.map((i) => i.message).join("\n")).toContain("explicit");
+  });
+
+  it("rejects a DSL route with an empty stages scope", () => {
+    const result = ConfiguredPipelineSchema.safeParse({
+      stages: [
+        baseStage,
+        {
+          ...baseStage,
+          name: "fix",
+          routes: { when: { kind: "all_pass", stages: [] } },
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an unscoped leaf nested inside and/or/not", () => {
+    const result = ConfiguredPipelineSchema.safeParse({
+      stages: [
+        baseStage,
+        {
+          ...baseStage,
+          name: "fix",
+          routes: {
+            when: {
+              kind: "and",
+              predicates: [{ kind: "all_pass", stages: ["review"] }, { kind: "no_open_findings" }],
+            },
+          },
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
   });
 });
 

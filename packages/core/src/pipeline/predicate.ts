@@ -95,7 +95,11 @@ export function evaluatePredicate(predicate: Predicate, context: PredicateContex
     case "all_pass": {
       const scope = predicate.stages ?? context.allStageNames;
       if (scope.length === 0) return true;
-      return scope.every((name) => isStagePassing(context.stages[name]));
+      // Legacy bridge: v1.1's `allSucceeded` / `anySucceeded` checked status
+      // only — preserve that exact semantics. New DSL callers consult the
+      // verdict-aware path.
+      const check = isLegacyAllPass(predicate) ? isStageSucceededByStatus : isStagePassing;
+      return scope.every((name) => check(context.stages[name]));
     }
     case "any_failed": {
       const scope = predicate.stages ?? context.allStageNames;
@@ -122,6 +126,15 @@ function isStagePassing(stage: StageState | undefined): boolean {
   if (!stage) return false;
   if (stage.verdict !== undefined) return stage.verdict === "pass";
   return stage.status === "succeeded";
+}
+
+/**
+ * Status-only check used by the legacy `allSucceeded` / `anySucceeded`
+ * bridge. v1.1's evaluator never looked at `verdict`; mirroring that here
+ * keeps legacy route configs evaluating identically across the upgrade.
+ */
+function isStageSucceededByStatus(stage: StageState | undefined): boolean {
+  return stage?.status === "succeeded";
 }
 
 function collectOpenFindings(
@@ -151,9 +164,13 @@ function collectOpenFindings(
  * scheduler keeps both shapes accepted so existing pipelines don't need a
  * rewrite, but evaluation goes through a single code path.
  *
- *  - `allSucceeded` → `all_pass`
- *  - `anySucceeded` → `or(all_pass([s]))`
- *  - `anyFailed`    → `any_failed`. v1.1's `anyFailed` matches `status ===
+ *  - `allSucceeded` / `anySucceeded` — v1.1's evaluator checked `status ===
+ *    "succeeded"` directly and ignored `verdict`. The new `all_pass` leaf
+ *    prefers `verdict` over `status`, which would (silently) change
+ *    semantics for any stage that sets a non-`"pass"` verdict on a succeeded
+ *    stage. We tag the bridged predicates with an internal marker so the
+ *    evaluator falls back to a status-only check for legacy routes.
+ *  - `anyFailed` → `any_failed`. v1.1's `anyFailed` matches `status ===
  *    "failed"` specifically — `not(all_pass)` would (wrongly) also fire for
  *    `skipped` / `outdated` stages, which v1.1's evaluator never treated as
  *    failures. The dedicated `any_failed` leaf preserves the exact semantics.
@@ -161,15 +178,41 @@ function collectOpenFindings(
 export function fromLegacyRoutePredicate(legacy: StageRoutePredicate): Predicate {
   switch (legacy.kind) {
     case "allSucceeded":
-      return { kind: "all_pass", stages: [...legacy.stages] };
+      return tagLegacy({ kind: "all_pass", stages: [...legacy.stages] });
     case "anySucceeded":
       return {
         kind: "or",
-        predicates: legacy.stages.map((s) => ({ kind: "all_pass", stages: [s] })),
+        predicates: legacy.stages.map((s) => tagLegacy({ kind: "all_pass" as const, stages: [s] })),
       };
     case "anyFailed":
       return { kind: "any_failed", stages: [...legacy.stages] };
   }
+}
+
+/**
+ * Internal marker attached to `all_pass` leaves bridged from v1.1's
+ * `allSucceeded` / `anySucceeded`. Surfaces as a non-enumerable boolean
+ * property so it doesn't leak through Zod / JSON serialization (legacy
+ * routes are parsed via `StageRoutePredicateSchema` and re-bridged on every
+ * evaluation, so the tag is regenerated rather than persisted).
+ *
+ * The evaluator reads this through `isLegacyAllPass` to decide whether to
+ * consult `verdict` or fall back to status-only — the legacy bridge is the
+ * only place this gates evaluation.
+ */
+const LEGACY_TAG: unique symbol = Symbol.for("ao.pipeline.predicate.legacyAllPass");
+
+function tagLegacy<P extends Predicate>(predicate: P): P {
+  Object.defineProperty(predicate, LEGACY_TAG, {
+    value: true,
+    enumerable: false,
+    configurable: true,
+  });
+  return predicate;
+}
+
+function isLegacyAllPass(predicate: Predicate): boolean {
+  return (predicate as unknown as Record<symbol, unknown>)[LEGACY_TAG] === true;
 }
 
 const LEGACY_KINDS = new Set(["allSucceeded", "anySucceeded", "anyFailed"]);
@@ -230,8 +273,62 @@ export function evaluateExitPredicates(
 }
 
 /**
+ * Validate that every leaf inside a route predicate has an explicit, non-empty
+ * `stages` scope. Routes are activation gates — a leaf with no scope defaults
+ * to "every stage in the run," which makes `arePreconditionsTerminal` trivially
+ * true at trigger time (`collectReferencedStages` returns nothing to await) and
+ * lets the predicate evaluate immediately against still-pending stages. The
+ * common failure mode is `{ kind: "all_pass" }` (no stages) on a stage that
+ * cascade-skips before it can run, because the stage's own `pending` status
+ * makes the predicate false. Exit predicates don't have this problem — they
+ * only fire when every stage is already terminal, so "all stages" is a
+ * well-defined default there.
+ *
+ * Returns a list of human-readable problems; an empty list means the predicate
+ * is route-safe. Callers attach `stages: [i, "routes", "when"]` etc. to the
+ * Zod issue context.
+ */
+export function validateRoutePredicateScope(value: StageRoutePredicate | Predicate): string[] {
+  if (isLegacyRoutePredicate(value)) {
+    // Legacy shapes have a required, min(1) `stages` field at the schema
+    // level; nothing to validate here.
+    return [];
+  }
+  const problems: string[] = [];
+  walk(value, problems);
+  return problems;
+
+  function walk(p: Predicate, out: string[]): void {
+    switch (p.kind) {
+      case "all_pass":
+      case "any_failed":
+      case "no_open_findings":
+      case "finding_count_below":
+        if (!p.stages || p.stages.length === 0) {
+          out.push(
+            `${p.kind} leaf in routes.when must declare an explicit, non-empty "stages" scope (route predicates evaluate at trigger time, so the "all stages" default would consume the host stage itself and immediately skip it)`,
+          );
+        }
+        return;
+      case "and":
+      case "or":
+        for (const child of p.predicates) walk(child, out);
+        return;
+      case "not":
+        walk(p.predicate, out);
+        return;
+    }
+  }
+}
+
+/**
  * Predicate-tree depth (defense-in-depth against deeply-nested config).
  * `0` for a leaf, `1 + max(child depths)` for combinators.
+ *
+ * Treats an empty `and` / `or` combinator as a leaf (depth `0`) instead of
+ * `-Infinity` from `Math.max(...[])`. The Zod schema rejects `predicates:
+ * []` via `.min(1)`, but a programmatically-constructed Predicate can hit
+ * this path (e.g. defensive `validatePipelineExitPredicates` below).
  */
 export function predicateDepth(predicate: Predicate): number {
   switch (predicate.kind) {
@@ -242,6 +339,7 @@ export function predicateDepth(predicate: Predicate): number {
       return 0;
     case "and":
     case "or":
+      if (predicate.predicates.length === 0) return 0;
       return 1 + Math.max(...predicate.predicates.map(predicateDepth));
     case "not":
       return 1 + predicateDepth(predicate.predicate);
