@@ -204,7 +204,7 @@ function SessionPageShell({
   sidebarSessions: DashboardSession[] | null;
   sidebarOrchestrators?: ProjectSidebarOrchestrator[];
   sidebarLoading: boolean;
-  sidebarError: boolean;
+  sidebarError: string | null;
   onRetrySidebar: () => void;
   activeProjectId?: string;
   activeSessionId?: string;
@@ -410,7 +410,7 @@ export default function SessionPage() {
   const [loading, setLoading] = useState(cachedSession === null);
   const [routeError, setRouteError] = useState<Error | null>(null);
   const [sessionMissing, setSessionMissing] = useState(false);
-  const [sidebarError, setSidebarError] = useState(false);
+  const [sidebarError, setSidebarError] = useState<string | null>(null);
   const [prefixByProject, setPrefixByProject] = useState<Map<string, string>>(new Map());
   const sessionProjectId = session?.projectId ?? null;
   const allPrefixes = [...prefixByProject.values()];
@@ -689,7 +689,7 @@ export default function SessionPage() {
         applyMuxSessionPatches(restSessions, pendingMuxSessionsRef.current ?? []) ?? restSessions;
       cachedSidebarSessions = nextSessions;
       setSidebarOrchestrators(body?.orchestrators);
-      setSidebarError(false);
+      setSidebarError(null);
       setSidebarSessions((current) =>
         areSidebarSessionsEqual(current, nextSessions) ? current : nextSessions,
       );
@@ -698,7 +698,7 @@ export default function SessionPage() {
         return;
       }
       console.error("Failed to fetch sidebar sessions:", err);
-      setSidebarError(true);
+      setSidebarError(err instanceof Error ? err.message : String(err));
       setSidebarSessions((current) => (current === null ? [] : current));
     } finally {
       fetchingSidebarRef.current = false;

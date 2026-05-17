@@ -123,6 +123,65 @@ describe("ProjectSidebar", () => {
     expect(screen.getByRole("button", { name: /new project/i })).toBeInTheDocument();
   });
 
+  it("shows a first-load failure only for the empty session state", () => {
+    render(
+      <ProjectSidebar
+        projects={projects}
+        sessions={[]}
+        activeProjectId="project-1"
+        activeSessionId={undefined}
+        error="HTTP 500"
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Failed to load sessions")).toBeInTheDocument();
+    expect(screen.getByText("HTTP 500")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Failed to refresh · showing cached sessions"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows transient empty-sidebar failures as temporary instead of hard first-load failures", () => {
+    render(
+      <ProjectSidebar
+        projects={projects}
+        sessions={[]}
+        activeProjectId="project-1"
+        activeSessionId={undefined}
+        error="Sidebar sessions request timed out after 6000ms"
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Sessions temporarily unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Failed to load sessions")).not.toBeInTheDocument();
+    expect(screen.getByText("Sidebar sessions request timed out after 6000ms")).toBeInTheDocument();
+  });
+
+  it("shows a cached-data refresh banner without replacing visible sessions", () => {
+    render(
+      <ProjectSidebar
+        projects={projects}
+        sessions={[
+          makeSession({
+            id: "project-1-session",
+            projectId: "project-1",
+            branch: "feat/cached",
+          }),
+        ]}
+        activeProjectId="project-1"
+        activeSessionId={undefined}
+        error="GitHub API rate limited"
+      />,
+    );
+
+    expect(screen.getByText("Failed to refresh · showing cached sessions")).toBeInTheDocument();
+    expect(screen.getByText("GitHub API rate limited")).toBeInTheDocument();
+    expect(screen.queryByText("Failed to load sessions")).not.toBeInTheDocument();
+    expect(screen.getByText("feat/cached")).toBeInTheDocument();
+  });
+
   it("marks the active project row as the current page", () => {
     render(
       <ProjectSidebar

@@ -33,7 +33,7 @@ interface ProjectSidebarProps {
   activeProjectId: string | undefined;
   activeSessionId: string | undefined;
   loading?: boolean;
-  error?: boolean;
+  error?: string | null;
   onRetry?: () => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -41,6 +41,18 @@ interface ProjectSidebarProps {
 }
 
 type SessionDotLevel = "respond" | "review" | "action" | "pending" | "working" | "merge" | "done";
+
+function isTransientSessionListError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  const normalized = error.toLowerCase();
+  return (
+    normalized.includes("timed out") ||
+    normalized.includes("timeout") ||
+    normalized.includes("failed to fetch") ||
+    normalized.includes("networkerror") ||
+    normalized.includes("network error")
+  );
+}
 
 const SessionDot = memo(function SessionDot({ level }: { level: SessionDotLevel }) {
   return (
@@ -277,7 +289,7 @@ function ProjectSidebarInner({
   activeProjectId,
   activeSessionId,
   loading = false,
-  error = false,
+  error = null,
   onRetry,
   collapsed = false,
   onToggleCollapsed: _onToggleCollapsed,
@@ -285,6 +297,7 @@ function ProjectSidebarInner({
 }: ProjectSidebarProps) {
   const router = useRouter();
   const _isLoading = loading || sessions === null;
+  const transientError = isTransientSessionListError(error);
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     () =>
@@ -701,9 +714,14 @@ function ProjectSidebarInner({
       {error && sessions && sessions.length > 0 ? (
         <div
           role="status"
-          className="mx-3 mb-2 flex items-center justify-between gap-2 rounded-md border border-[var(--color-border-strong)] bg-[var(--color-bg-primary)] px-2 py-1.5 text-[11px] text-[var(--color-text-tertiary)]"
+          className="mx-3 mb-2 flex items-start justify-between gap-2 rounded-md border border-[var(--color-border-strong)] bg-[var(--color-bg-primary)] px-2 py-1.5 text-[11px] text-[var(--color-text-tertiary)]"
         >
-          <span>Failed to refresh · showing cached sessions</span>
+          <span className="min-w-0">
+            <span className="block">Failed to refresh · showing cached sessions</span>
+            <span className="block truncate" title={error}>
+              {error}
+            </span>
+          </span>
           {onRetry ? (
             <button
               type="button"
@@ -1031,14 +1049,26 @@ function ProjectSidebarInner({
                     })
                   ) : error ? (
                     <div className="px-3 py-2">
-                      <div className="project-sidebar__empty">Failed to load sessions</div>
-                      <button
-                        type="button"
-                        className="mt-2 text-xs font-medium text-[var(--color-link)] hover:underline"
-                        onClick={onRetry}
+                      <div className="project-sidebar__empty">
+                        {transientError
+                          ? "Sessions temporarily unavailable"
+                          : "Failed to load sessions"}
+                      </div>
+                      <div
+                        className="mt-1 break-words text-xs text-[var(--color-text-tertiary)]"
+                        title={error}
                       >
-                        Retry
-                      </button>
+                        {error}
+                      </div>
+                      {onRetry ? (
+                        <button
+                          type="button"
+                          className="mt-2 text-xs font-medium text-[var(--color-link)] hover:underline"
+                          onClick={onRetry}
+                        >
+                          Retry
+                        </button>
+                      ) : null}
                     </div>
                   ) : (
                     <div className="project-sidebar__empty">

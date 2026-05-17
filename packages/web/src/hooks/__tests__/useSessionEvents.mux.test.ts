@@ -19,6 +19,7 @@ describe("useSessionEvents - mux", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it("triggers refresh when mux patch contains unknown id", async () => {
@@ -107,6 +108,5 @@ describe("useSessionEvents - mux", () => {
       "[useSessionEvents] refresh failed:",
       expect.anything(),
     );
-    vi.useRealTimers();
   });
 });
