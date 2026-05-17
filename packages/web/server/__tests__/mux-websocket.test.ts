@@ -1104,6 +1104,7 @@ describe("TerminalManager.open — re-attach skipped when tmux session is gone (
 describe("TerminalManager shutdown", () => {
   let capturedOnExit: ((evt: { exitCode: number }) => Promise<void> | void) | undefined;
   let pty: {
+    pid: number;
     onData: ReturnType<typeof vi.fn>;
     onExit: ReturnType<typeof vi.fn>;
     write: ReturnType<typeof vi.fn>;
@@ -1120,6 +1121,7 @@ describe("TerminalManager shutdown", () => {
 
     mockSpawn.mockImplementation(() => new EventEmitter());
     pty = {
+      pid: 4242,
       onData: vi.fn(),
       onExit: vi.fn((cb: (evt: { exitCode: number }) => Promise<void> | void) => {
         capturedOnExit = cb;
@@ -1142,7 +1144,16 @@ describe("TerminalManager shutdown", () => {
     mgr.subscribe("ao-177", undefined, vi.fn(), exitCb);
 
     const shutdownPromise = mgr.shutdownGracefully(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockSpawn).toHaveBeenCalledWith("/usr/bin/tmux", [
+      "list-clients",
+      "-t",
+      "=ao-177",
+      "-F",
+      "#{client_pid}\t#{client_name}",
+    ]);
     expect(pty.write).toHaveBeenCalledWith("\x02d");
+    expect(mockSpawn).not.toHaveBeenCalledWith("/usr/bin/tmux", ["detach-client", "-s", "=ao-177"]);
 
     await capturedOnExit!({ exitCode: 0 });
     await vi.advanceTimersByTimeAsync(1000);
@@ -1161,7 +1172,9 @@ describe("TerminalManager shutdown", () => {
     const shutdownPromise = mgr.shutdownGracefully(1000);
     unsubscribe();
 
+    await vi.advanceTimersByTimeAsync(0);
     expect(pty.write).toHaveBeenCalledWith("\x02d");
+    expect(mockSpawn).not.toHaveBeenCalledWith("/usr/bin/tmux", ["detach-client", "-s", "=ao-177"]);
     expect(pty.kill).not.toHaveBeenCalled();
 
     await capturedOnExit!({ exitCode: 0 });

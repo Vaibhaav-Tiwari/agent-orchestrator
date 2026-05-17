@@ -77,8 +77,12 @@ function httpGet(path: string): Promise<{ status: number; body: string }> {
 
 /** Open a raw WebSocket to /mux and wait for the connection to be established. */
 function connectMux(): Promise<WebSocket> {
+  return connectMuxToPort(port);
+}
+
+function connectMuxToPort(targetPort: number): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://localhost:${port}/mux`);
+    const ws = new WebSocket(`ws://localhost:${targetPort}/mux`);
     ws.on("open", () => resolve(ws));
     ws.on("error", reject);
     setTimeout(() => reject(new Error("WebSocket connect timeout")), 5000);
@@ -110,6 +114,27 @@ function waitForMessage(
       ws.off("message", handler);
       reject(new Error("Timed out waiting for matching message"));
     }, timeoutMs);
+  });
+}
+
+function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 3000,
+  errorMessage = "Timed out waiting for condition",
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const interval = setInterval(() => {
+      if (predicate()) {
+        clearInterval(interval);
+        resolve();
+        return;
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        clearInterval(interval);
+        reject(new Error(errorMessage));
+      }
+    }, 25);
   });
 }
 
@@ -231,6 +256,67 @@ describeWithTmux("WebSocket upgrade routing", () => {
     });
     // socket.destroy() causes the client to see a non-1000 close or error
     expect(result.code).not.toBe(1000);
+  });
+});
+
+// =============================================================================
+// Server shutdown
+// =============================================================================
+
+describeWithTmux("server shutdown", () => {
+  it("drains attached PTYs before closing mux clients so shutdown exits code 0", async () => {
+    if (!TMUX) return; // describeWithTmux already skips on Windows; this narrows the type
+
+    const sessionId = `shutdown-test-${process.pid}-${Date.now()}`;
+    const tmuxName = `ao-test-shutdown-${process.pid}-${Date.now()}`;
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      logs.push(args.map(String).join(" "));
+    });
+
+    execFileSync(TMUX, ["new-session", "-d", "-s", tmuxName, "-x", "80", "-y", "24"], {
+      timeout: 5000,
+    });
+
+    const shutdownServer = createDirectTerminalServer(TMUX);
+
+    try {
+      shutdownServer.server.listen(0);
+      const addr = shutdownServer.server.address();
+      const shutdownPort = typeof addr === "object" && addr ? addr.port : 0;
+      expect(shutdownPort).toBeGreaterThan(0);
+
+      const ws = await connectMuxToPort(shutdownPort);
+      ws.send(JSON.stringify({ ch: "terminal", id: sessionId, tmuxName, type: "open" }));
+      await waitForMessage(ws, (m) => m.ch === "terminal" && m.type === "opened");
+      await waitForMessage(
+        ws,
+        (m) => m.ch === "terminal" && m.type === "data" && m.id === sessionId,
+        5_000,
+      );
+
+      (shutdownServer.shutdown as (opts?: { drainMs?: number }) => void)({ drainMs: 1_000 });
+
+      await waitForCondition(
+        () => logs.some((line) => line.includes(`PTY exited for ${sessionId} with code 0`)),
+        4_000,
+        `Timed out waiting for PTY shutdown exit code 0. Logs:\n${logs.join("\n")}`,
+      );
+
+      expect(logs).not.toContain(`[MuxServer] PTY exited for ${sessionId} with code 1`);
+    } finally {
+      logSpy.mockRestore();
+      try {
+        shutdownServer.server.close();
+      } catch {
+        /* already closed */
+      }
+      try {
+        execFileSync(TMUX, ["kill-session", "-t", tmuxName], { timeout: 5000 });
+      } catch {
+        /* already gone */
+      }
+    }
   });
 });
 
