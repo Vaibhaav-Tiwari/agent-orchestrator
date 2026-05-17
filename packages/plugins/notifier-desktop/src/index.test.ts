@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import type { OrchestratorEvent, NotifyAction } from "@aoagents/ao-core";
 
 // Mock node:child_process
@@ -27,6 +27,11 @@ const mockExecFile = execFile as unknown as Mock;
 const mockExecFileSync = execFileSync as unknown as Mock;
 const mockExistsSync = existsSync as unknown as Mock;
 const mockPlatform = platform as unknown as Mock;
+const originalProcessPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+
+function setProcessPlatform(value: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", { value, configurable: true });
+}
 
 function makeEvent(overrides: Partial<OrchestratorEvent> = {}): OrchestratorEvent {
   return {
@@ -46,6 +51,7 @@ describe("notifier-desktop", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPlatform.mockReturnValue("darwin");
+    setProcessPlatform("darwin");
     mockExistsSync.mockReturnValue(false);
     // Default: terminal-notifier not available (osascript fallback)
     mockExecFileSync.mockImplementation(() => {
@@ -61,6 +67,12 @@ describe("notifier-desktop", () => {
         | undefined;
       cb?.(null);
     });
+  });
+
+  afterEach(() => {
+    if (originalProcessPlatform) {
+      Object.defineProperty(process, "platform", originalProcessPlatform);
+    }
   });
 
   describe("manifest", () => {

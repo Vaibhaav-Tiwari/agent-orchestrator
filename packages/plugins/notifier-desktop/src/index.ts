@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   escapeAppleScript,
   getNotificationDataV3,
+  isMac,
   type PluginModule,
   type Notifier,
   type OrchestratorEvent,
@@ -537,7 +538,7 @@ export function create(config?: Record<string, unknown>): Notifier {
   const backend = parseBackend(config?.backend);
   const appPath = typeof config?.appPath === "string" ? config.appPath : defaultMacAppPath();
   const hasTerminalNotifier =
-    platform() === "darwin" && (backend === "auto" || backend === "terminal-notifier")
+    isMac() && (backend === "auto" || backend === "terminal-notifier")
       ? detectTerminalNotifier()
       : false;
   const mac = {

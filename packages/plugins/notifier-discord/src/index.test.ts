@@ -116,6 +116,36 @@ describe("notifier-discord", () => {
     expect(ciField.value).toContain("Passing");
   });
 
+  it("encodes closing parentheses in markdown link URLs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const notifier = create({ webhookUrl: "https://discord.com/api/webhooks/123/abc" });
+    await notifier.notify(
+      makeEvent({
+        data: makeV3Data({
+          ci: {
+            status: "failing",
+            failedChecks: [
+              {
+                name: "build(test)",
+                status: "completed",
+                conclusion: "failure",
+                url: "https://github.com/org/repo/actions/runs/1?q=(abc)",
+              },
+            ],
+          },
+        }),
+      }),
+    );
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const checksField = body.embeds[0].fields.find((f: { name: string }) => f.name === "Checks");
+    expect(checksField.value).toContain(
+      "[buildtest: completed/failure](https://github.com/org/repo/actions/runs/1?q=(abc%29)",
+    );
+  });
+
   it("notifyWithActions includes action links", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
     vi.stubGlobal("fetch", fetchMock);

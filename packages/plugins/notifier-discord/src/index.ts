@@ -140,7 +140,7 @@ function appendField(
 }
 
 function formatMarkdownLink(label: string, url: string): string {
-  return `[${label.replace(/[\][()]/g, "")}](${url})`;
+  return `[${label.replace(/[\][()]/g, "")}](${url.replace(/\)/g, "%29")})`;
 }
 
 function formatBranch(data: NotificationDataV3 | null): string | undefined {
