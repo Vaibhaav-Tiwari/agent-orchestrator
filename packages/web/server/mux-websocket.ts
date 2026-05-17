@@ -423,14 +423,32 @@ export class TerminalManager {
       // clean user-initiated termination — see issue #1756. The
       // MAX_REATTACH_ATTEMPTS bound from #1640 still covers tmux server
       // hiccups where the session does still exist.
-      if (
-        terminal.subscribers.size > 0 &&
-        !(await tmuxHasSession(this.TMUX, tmuxSessionId))
-      ) {
+      if (terminal.subscribers.size > 0 && !(await tmuxHasSession(this.TMUX, tmuxSessionId))) {
         console.log(`[MuxServer] tmux session ${tmuxSessionId} is gone, not re-attaching`);
         if (terminal.resetTimer) {
           clearTimeout(terminal.resetTimer);
           terminal.resetTimer = undefined;
+        }
+        if (!terminal.ptyLostEmitted) {
+          terminal.ptyLostEmitted = true;
+          recordActivityEvent({
+            projectId,
+            sessionId: id,
+            source: "ui",
+            kind: "ui.terminal_pty_lost",
+            level: "warn",
+            summary: `terminal PTY exited (code ${exitCode}) — tmux session gone`,
+            data: {
+              sessionId: id,
+              exitCode,
+              reattachAttempts: terminal.reattachAttempts,
+              maxReattachAttempts: MAX_REATTACH_ATTEMPTS,
+              reattachExhausted: false,
+              reattachSkipped: true,
+              tmuxSessionPresent: false,
+              subscriberCount: terminal.subscribers.size,
+            },
+          });
         }
         for (const cb of terminal.exitCallbacks) {
           cb(exitCode);
@@ -595,6 +613,8 @@ export class TerminalManager {
 
 // ── Windows Pipe Relay (extracted for testability) ──
 
+const intentionalWinPipeCloses = new WeakSet<Socket>();
+
 /** Minimal WebSocket-like interface for the pipe relay handler */
 export interface WsSink {
   send(data: string): void;
@@ -666,8 +686,36 @@ export function handleWindowsPipeMessage(
       const pipeSocket = deps.connect(pipePath);
       winPipes.set(pipeKey, pipeSocket);
       winPipeBuffers.set(pipeKey, Buffer.alloc(0));
+      let ptyLostEmitted = false;
+      const recordWindowsPtyLost = (
+        reason: "pipe_closed" | "host_not_alive" | "pipe_error",
+        extra?: Record<string, unknown>,
+      ): void => {
+        if (ptyLostEmitted || ws.readyState !== WS_OPEN) return;
+        ptyLostEmitted = true;
+        recordActivityEvent({
+          projectId,
+          sessionId: id,
+          source: "ui",
+          kind: "ui.terminal_pty_lost",
+          level: "warn",
+          summary:
+            reason === "host_not_alive"
+              ? `terminal PTY host reported not alive for ${id}`
+              : reason === "pipe_error"
+                ? `terminal PTY host pipe errored for ${id}`
+                : `terminal PTY host pipe closed for ${id}`,
+          data: {
+            sessionId: id,
+            transport: "windows_pipe",
+            reason,
+            ...extra,
+          },
+        });
+      };
 
       pipeSocket.on("error", (err) => {
+        recordWindowsPtyLost("pipe_error", { errorMessage: err.message });
         winPipes.delete(pipeKey);
         winPipeBuffers.delete(pipeKey);
         pipeSocket.destroy();
@@ -717,6 +765,7 @@ export function handleWindowsPipeMessage(
               try {
                 const status = JSON.parse(payload.toString("utf-8")) as { alive: boolean };
                 if (!status.alive && ws.readyState === WS_OPEN) {
+                  recordWindowsPtyLost("host_not_alive");
                   ws.send(JSON.stringify({ ch: "terminal", id, type: "exited", code: 0, ...echo }));
                 }
               } catch {
@@ -729,7 +778,11 @@ export function handleWindowsPipeMessage(
         pipeSocket.on("close", () => {
           winPipes.delete(pipeKey);
           winPipeBuffers.delete(pipeKey);
+          const intentionalClose = intentionalWinPipeCloses.delete(pipeSocket);
           if (ws.readyState === WS_OPEN) {
+            if (!intentionalClose) {
+              recordWindowsPtyLost("pipe_closed");
+            }
             ws.send(JSON.stringify({ ch: "terminal", id, type: "exited", code: 0, ...echo }));
           }
         });
@@ -756,6 +809,7 @@ export function handleWindowsPipeMessage(
   } else if (type === "close") {
     const pipeSocket = winPipes.get(pipeKey);
     if (pipeSocket) {
+      intentionalWinPipeCloses.add(pipeSocket);
       pipeSocket.end();
       winPipes.delete(pipeKey);
       winPipeBuffers.delete(pipeKey);

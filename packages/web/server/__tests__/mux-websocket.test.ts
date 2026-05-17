@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
+import type { Socket } from "node:net";
 import { WebSocket } from "ws";
 import type { SessionBroadcaster as SessionBroadcasterType } from "../mux-websocket";
 
@@ -48,7 +49,7 @@ vi.mock("../tmux-utils.js", () => ({
   tmuxHasSession: (...args: unknown[]) => mockTmuxHasSession(...args),
 }));
 
-const { SessionBroadcaster, TerminalManager, createMuxWebSocket } =
+const { SessionBroadcaster, TerminalManager, createMuxWebSocket, handleWindowsPipeMessage } =
   await import("../mux-websocket");
 
 // Mock global fetch
@@ -407,6 +408,16 @@ class FakeWS extends EventEmitter {
   send = vi.fn();
 }
 
+class FakePipeSocket extends EventEmitter {
+  write = vi.fn();
+  end = vi.fn(() => {
+    this.emit("close");
+  });
+  destroy = vi.fn(() => {
+    this.emit("close");
+  });
+}
+
 function makeFakeRequest(opts?: { remoteAddress?: string; xff?: string }) {
   return {
     headers: opts?.xff ? { "x-forwarded-for": opts.xff } : {},
@@ -523,6 +534,107 @@ describe("mux WebSocket connection events", () => {
     expect(calls.length).toBe(1);
     const evt = findEvent("ui.terminal_protocol_error")!;
     expect(evt.data["errorMessage"]).toBeTruthy();
+  });
+});
+
+describe("Windows pipe ui.terminal_pty_lost activity events", () => {
+  beforeEach(() => {
+    recordActivityEvent.mockClear();
+  });
+
+  function framedMessage(type: number, payload: unknown): Buffer {
+    const body = Buffer.from(JSON.stringify(payload), "utf-8");
+    const header = Buffer.alloc(5);
+    header.writeUInt8(type, 0);
+    header.writeUInt32BE(body.length, 1);
+    return Buffer.concat([header, body]);
+  }
+
+  function openPipe() {
+    const ws = new FakeWS();
+    const pipe = new FakePipeSocket();
+    const winPipes = new Map<string, Socket>();
+    const winPipeBuffers = new Map<string, Buffer>();
+    const deps = {
+      connect: vi.fn(() => pipe as unknown as Socket),
+      resolvePipePath: vi.fn(() => "\\\\.\\pipe\\ao-pty-app-1"),
+    };
+
+    handleWindowsPipeMessage(
+      { id: "app-1", type: "open", projectId: "proj-1" },
+      ws,
+      winPipes,
+      winPipeBuffers,
+      deps,
+    );
+    pipe.emit("connect");
+    recordActivityEvent.mockClear();
+    ws.send.mockClear();
+
+    return { ws, pipe, winPipes, winPipeBuffers, deps };
+  }
+
+  function ptyLostEvents(): Array<{ data: Record<string, unknown>; sessionId?: string }> {
+    return recordActivityEvent.mock.calls
+      .map(([e]) => e as { kind: string; data: Record<string, unknown>; sessionId?: string })
+      .filter((event) => event.kind === "ui.terminal_pty_lost");
+  }
+
+  it("emits ui.terminal_pty_lost when the PTY host pipe closes while the socket is open", () => {
+    const { ws, pipe } = openPipe();
+
+    pipe.emit("close");
+
+    expect(ptyLostEvents()).toEqual([
+      expect.objectContaining({
+        sessionId: "app-1",
+        data: expect.objectContaining({
+          sessionId: "app-1",
+          transport: "windows_pipe",
+          reason: "pipe_closed",
+        }),
+      }),
+    ]);
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ ch: "terminal", id: "app-1", type: "exited", code: 0, projectId: "proj-1" }),
+    );
+  });
+
+  it("emits ui.terminal_pty_lost when the PTY host reports not alive", () => {
+    const { ws, pipe } = openPipe();
+
+    pipe.emit("data", framedMessage(0x07, { alive: false }));
+    pipe.emit("close");
+
+    const events = ptyLostEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual(
+      expect.objectContaining({
+        sessionId: "app-1",
+        data: expect.objectContaining({
+          sessionId: "app-1",
+          transport: "windows_pipe",
+          reason: "host_not_alive",
+        }),
+      }),
+    );
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ ch: "terminal", id: "app-1", type: "exited", code: 0, projectId: "proj-1" }),
+    );
+  });
+
+  it("does not emit ui.terminal_pty_lost for an intentional client close", () => {
+    const { ws, winPipes, winPipeBuffers, deps } = openPipe();
+
+    handleWindowsPipeMessage(
+      { id: "app-1", type: "close", projectId: "proj-1" },
+      ws,
+      winPipes,
+      winPipeBuffers,
+      deps,
+    );
+
+    expect(ptyLostEvents()).toEqual([]);
   });
 });
 
@@ -720,6 +832,7 @@ describe("TerminalManager.open — re-attach skipped when tmux session is gone (
     mockSpawn.mockReset();
     mockPtySpawn.mockReset();
     mockTmuxHasSession.mockReset();
+    recordActivityEvent.mockClear();
     capturedOnExit = undefined;
 
     mockSpawn.mockImplementation(() => new EventEmitter());
@@ -750,6 +863,20 @@ describe("TerminalManager.open — re-attach skipped when tmux session is gone (
     // Subscribers were notified with the original exit code.
     expect(exitCb).toHaveBeenCalledTimes(1);
     expect(exitCb).toHaveBeenCalledWith(0);
+    expect(recordActivityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "ui",
+        kind: "ui.terminal_pty_lost",
+        level: "warn",
+        sessionId: "ao-177",
+        data: expect.objectContaining({
+          sessionId: "ao-177",
+          exitCode: 0,
+          reattachSkipped: true,
+          tmuxSessionPresent: false,
+        }),
+      }),
+    );
   });
 
   it("still re-attaches when has-session reports the tmux session is alive", async () => {
