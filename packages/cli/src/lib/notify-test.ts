@@ -5,6 +5,8 @@ import {
   buildPRStateNotificationData,
   buildReactionNotificationData,
   buildSessionTransitionNotificationData,
+  createProjectObserver,
+  recordNotificationDelivery,
   resolveNotifierTarget,
   type CICheck,
   type EventPriority,
@@ -541,6 +543,7 @@ export async function runNotifyTest(
   const warnings: string[] = [];
   const errors: string[] = [];
   const deliveries: NotifyDeliveryResult[] = [];
+  const observer = request.dryRun ? null : createProjectObserver(config, "notify-test");
 
   if (targets.length === 0) {
     errors.push(
@@ -567,6 +570,18 @@ export async function runNotifyTest(
     if (!notifier) {
       const error = `${target.reference}: notifier plugin "${target.pluginName}" is not loaded`;
       errors.push(error);
+      if (observer) {
+        recordNotificationDelivery({
+          observer,
+          event,
+          target,
+          outcome: "failure",
+          method: "notify",
+          reason: "notifier target not found",
+          failureKind: "target_missing",
+          recordActivityEvent: true,
+        });
+      }
       deliveries.push({
         reference: target.reference,
         pluginName: target.pluginName,
@@ -588,6 +603,8 @@ export async function runNotifyTest(
     }
 
     try {
+      const method =
+        actions.length > 0 && notifier.notifyWithActions ? "notifyWithActions" : "notify";
       if (actions.length > 0 && notifier.notifyWithActions) {
         await notifier.notifyWithActions(event, actions);
         deliveries.push({
@@ -612,14 +629,37 @@ export async function runNotifyTest(
           warning,
         });
       }
+      if (observer) {
+        recordNotificationDelivery({
+          observer,
+          event,
+          target,
+          outcome: "success",
+          method,
+        });
+      }
     } catch (err) {
       const error = `${target.reference}: ${err instanceof Error ? err.message : String(err)}`;
+      const method =
+        actions.length > 0 && notifier.notifyWithActions ? "notifyWithActions" : "notify";
       errors.push(error);
+      if (observer) {
+        recordNotificationDelivery({
+          observer,
+          event,
+          target,
+          outcome: "failure",
+          method,
+          reason: err instanceof Error ? err.message : String(err),
+          failureKind: "delivery_failed",
+          recordActivityEvent: true,
+        });
+      }
       deliveries.push({
         reference: target.reference,
         pluginName: target.pluginName,
         status: "failed",
-        method: actions.length > 0 && notifier.notifyWithActions ? "notifyWithActions" : "notify",
+        method,
         error,
       });
     }

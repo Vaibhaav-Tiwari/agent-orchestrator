@@ -198,6 +198,13 @@ const NotifierConfigSchema = z
   .passthrough()
   .superRefine((value, ctx) => validatePluginConfigFields(value, ctx, "Notifier"));
 
+const ObservabilityConfigSchema = z
+  .object({
+    logLevel: z.enum(["debug", "info", "warn", "error"]).default("warn"),
+    stderr: z.boolean().default(false),
+  })
+  .default({});
+
 const AgentPermissionSchema = z
   .enum(["permissionless", "default", "auto-edit", "suggest", "skip"])
   .default("permissionless")
@@ -354,6 +361,7 @@ const OrchestratorConfigSchema = z.object({
   readyThresholdMs: z.number().int().nonnegative().default(300_000),
   power: PowerConfigSchema,
   lifecycle: LifecycleConfigSchema,
+  observability: ObservabilityConfigSchema,
   defaults: DefaultPluginsSchema.default({}),
   plugins: z.array(InstalledPluginConfigSchema).default([]),
   dashboard: DashboardConfigSchema.optional(),
@@ -844,6 +852,7 @@ function buildEffectiveConfigFromFlatLocalPath(
     terminalPort: globalConfig.terminalPort,
     directTerminalPort: globalConfig.directTerminalPort,
     readyThresholdMs: globalConfig.readyThresholdMs,
+    observability: globalConfig.observability,
     defaults: globalConfig.defaults,
     notifiers: globalConfig.notifiers,
     notificationRouting: globalConfig.notificationRouting,
@@ -884,6 +893,7 @@ function buildEffectiveConfigFromGlobalConfigPath(configPath: string): LoadedCon
     terminalPort: globalConfig.terminalPort,
     directTerminalPort: globalConfig.directTerminalPort,
     readyThresholdMs: globalConfig.readyThresholdMs,
+    observability: globalConfig.observability,
     defaults: globalConfig.defaults,
     notifiers: globalConfig.notifiers,
     notificationRouting: globalConfig.notificationRouting,

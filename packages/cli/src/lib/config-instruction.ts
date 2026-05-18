@@ -20,6 +20,10 @@ terminalPort: 14800           # Optional terminal WebSocket port override
 directTerminalPort: 14801     # Optional direct terminal WebSocket port override
 readyThresholdMs: 300000      # Ms before "ready" becomes "idle" (default: 5 min)
 
+observability:
+  logLevel: warn              # debug | info | warn | error
+  stderr: false               # Mirror structured logs to stderr
+
 # ── Default plugins ─────────────────────────────────────────────────
 # These apply to all projects unless overridden per-project.
 

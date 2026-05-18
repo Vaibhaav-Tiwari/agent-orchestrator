@@ -1,9 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  Notifier,
-  OrchestratorConfig,
-  OrchestratorEvent,
-  PluginRegistry,
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import {
+  closeDb,
+  readObservabilitySummary,
+  type Notifier,
+  type OrchestratorConfig,
+  type OrchestratorEvent,
+  type PluginRegistry,
 } from "@aoagents/ao-core";
 import {
   addSinkNotifierConfig,
@@ -15,8 +21,9 @@ import {
 } from "../../src/lib/notify-test.js";
 
 function makeConfig(overrides: Partial<OrchestratorConfig> = {}): OrchestratorConfig {
+  const testHome = process.env["HOME"] ?? process.env["USERPROFILE"] ?? tmpdir();
   return {
-    configPath: "/tmp/agent-orchestrator.yaml",
+    configPath: join(testHome, "agent-orchestrator.yaml"),
     readyThresholdMs: 300_000,
     defaults: {
       runtime: "tmux",
@@ -61,8 +68,33 @@ function makeRegistry(notifiers: Record<string, Partial<Notifier> | undefined>):
 }
 
 describe("notify test helper", () => {
+  let tempRoot: string;
+  let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
+
+  beforeEach(() => {
+    tempRoot = join(tmpdir(), `ao-notify-test-${randomUUID()}`);
+    mkdirSync(tempRoot, { recursive: true });
+    originalHome = process.env["HOME"];
+    originalUserProfile = process.env["USERPROFILE"];
+    process.env["HOME"] = tempRoot;
+    process.env["USERPROFILE"] = tempRoot;
+  });
+
   afterEach(() => {
+    closeDb();
     vi.restoreAllMocks();
+    if (originalHome === undefined) {
+      delete process.env["HOME"];
+    } else {
+      process.env["HOME"] = originalHome;
+    }
+    if (originalUserProfile === undefined) {
+      delete process.env["USERPROFILE"];
+    } else {
+      process.env["USERPROFILE"] = originalUserProfile;
+    }
+    rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("builds realistic CI and PR template data", () => {
@@ -105,13 +137,17 @@ describe("notify test helper", () => {
       slack: { name: "slack", notify },
     });
 
-    const result = await runNotifyTest(makeConfig(), registry, { to: ["alerts"] });
+    const config = makeConfig();
+    const result = await runNotifyTest(config, registry, { to: ["alerts"] });
 
     expect(result.ok).toBe(true);
     expect(result.targets).toEqual([{ reference: "alerts", pluginName: "slack" }]);
     expect(registry.get).toHaveBeenCalledWith("notifier", "alerts");
     expect(registry.get).toHaveBeenCalledWith("notifier", "slack");
     expect(notify).toHaveBeenCalledTimes(1);
+
+    const summary = readObservabilitySummary(config);
+    expect(summary.projects["demo"]?.metrics["notification_delivery"]?.success).toBe(1);
   });
 
   it("resolves explicit routes through notificationRouting before defaults", () => {
@@ -155,6 +191,7 @@ describe("notify test helper", () => {
     expect(result.ok).toBe(true);
     expect(result.deliveries[0]?.status).toBe("dry_run");
     expect(notify).not.toHaveBeenCalled();
+    expect(readObservabilitySummary(makeConfig()).projects["demo"]).toBeUndefined();
   });
 
   it("uses notifyWithActions when available", async () => {
@@ -194,12 +231,18 @@ describe("notify test helper", () => {
       ops: { name: "ops", notify: passing },
     });
 
-    const result = await runNotifyTest(makeConfig(), registry, { route: "action" });
+    const config = makeConfig();
+    const result = await runNotifyTest(config, registry, { route: "action" });
 
     expect(result.ok).toBe(false);
     expect(failing).toHaveBeenCalledTimes(1);
     expect(passing).toHaveBeenCalledTimes(1);
     expect(result.deliveries.map((delivery) => delivery.status)).toEqual(["failed", "sent"]);
+    const summary = readObservabilitySummary(config);
+    expect(summary.projects["demo"]?.metrics["notification_delivery"]).toMatchObject({
+      success: 1,
+      failure: 1,
+    });
   });
 
   it("reports unresolved targets and no-target configs as failures", async () => {

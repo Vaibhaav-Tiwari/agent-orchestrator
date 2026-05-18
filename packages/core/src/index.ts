@@ -213,6 +213,10 @@ export {
 export { execGhObserved, getGhTraceFilePath } from "./gh-trace.js";
 export { resolveNotifierTarget } from "./notifier-resolution.js";
 export {
+  recordNotificationDelivery,
+  sanitizeNotificationDeliveryReason,
+} from "./notification-observability.js";
+export {
   NOTIFICATION_DATA_SCHEMA_VERSION,
   buildCIFailureNotificationData,
   buildNotificationSubject,
@@ -253,6 +257,12 @@ export type {
   ProjectObserver,
 } from "./observability.js";
 export type { GhTraceContext, GhTraceEntry } from "./gh-trace.js";
+export type {
+  NotificationDeliveryFailureKind,
+  NotificationDeliveryMethod,
+  NotificationDeliveryTarget,
+  RecordNotificationDeliveryInput,
+} from "./notification-observability.js";
 
 // Feedback tools — contracts, validation, and report storage
 export {

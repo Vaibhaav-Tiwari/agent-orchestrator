@@ -20,6 +20,7 @@ export type ActivityEventSource =
   | "scm"
   | "runtime"
   | "agent"
+  | "notifier"
   | "reaction"
   | "report-watcher";
 
@@ -51,6 +52,9 @@ export type ActivityEventKind =
   | "session.auto_cleanup_failed"
   | "lifecycle.poll_failed"
   | "detecting.escalated"
+  // Notification delivery
+  | "notification.delivery_failed"
+  | "notification.target_missing"
   // Report watcher
   | "report_watcher.triggered";
 

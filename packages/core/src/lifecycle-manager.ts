@@ -69,6 +69,7 @@ import {
 } from "./report-watcher.js";
 import { createCorrelationId, createProjectObserver } from "./observability.js";
 import { resolveNotifierTarget } from "./notifier-resolution.js";
+import { recordNotificationDelivery } from "./notification-observability.js";
 import { resolveAgentSelection, resolveSessionRole } from "./agent-selection.js";
 import {
   DETECTING_MAX_ATTEMPTS,
@@ -2279,12 +2280,40 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       const notifier =
         registry.get<Notifier>("notifier", target.reference) ??
         registry.get<Notifier>("notifier", target.pluginName);
-      if (notifier) {
-        try {
-          await notifier.notify(eventWithPriority);
-        } catch {
-          // Notifier failed — not much we can do
-        }
+      if (!notifier) {
+        recordNotificationDelivery({
+          observer,
+          event: eventWithPriority,
+          target,
+          outcome: "failure",
+          method: "notify",
+          reason: "notifier target not found",
+          failureKind: "target_missing",
+          recordActivityEvent: true,
+        });
+        continue;
+      }
+
+      try {
+        await notifier.notify(eventWithPriority);
+        recordNotificationDelivery({
+          observer,
+          event: eventWithPriority,
+          target,
+          outcome: "success",
+          method: "notify",
+        });
+      } catch (err) {
+        recordNotificationDelivery({
+          observer,
+          event: eventWithPriority,
+          target,
+          outcome: "failure",
+          method: "notify",
+          reason: err instanceof Error ? err.message : String(err),
+          failureKind: "delivery_failed",
+          recordActivityEvent: true,
+        });
       }
     }
   }

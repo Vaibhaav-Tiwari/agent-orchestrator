@@ -2844,6 +2844,112 @@ describe("reactions", () => {
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "merge.completed" }),
     );
+
+    const summary = readObservabilitySummary(config);
+    expect(summary.projects["my-app"]?.metrics["notification_delivery"]?.success).toBe(1);
+    expect(
+      summary.projects["my-app"]?.recentTraces.some(
+        (trace) =>
+          trace.operation === "notification.deliver" &&
+          trace.outcome === "success" &&
+          trace.data?.["targetReference"] === "desktop",
+      ),
+    ).toBe(true);
+  });
+
+  it("records notifier delivery failures without interrupting lifecycle transitions", async () => {
+    const notifier = createMockNotifier();
+    vi.mocked(notifier.notify).mockRejectedValue(new Error("webhook failed"));
+    const mockSCM = createMockSCM({
+      getPRState: vi.fn().mockResolvedValue("merged"),
+      enrichSessionsPRBatch: mockBatchEnrichment({ state: "merged" }),
+    });
+
+    const registry: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string, name: string) => {
+        if (slot === "runtime") return plugins.runtime;
+        if (slot === "agent") return plugins.agent;
+        if (slot === "scm") return mockSCM;
+        if (slot === "notifier" && name === "desktop") return notifier;
+        return null;
+      }),
+    };
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "approved", pr: makePR() }),
+      registry,
+    });
+
+    await lm.check("app-1");
+
+    expect(lm.getStates().get("app-1")).toBe("merged");
+    expect(recordActivityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "notifier",
+        kind: "notification.delivery_failed",
+        level: "warn",
+        data: expect.objectContaining({
+          eventType: "merge.completed",
+          targetReference: "desktop",
+          targetPlugin: "desktop",
+        }),
+      }),
+    );
+
+    const summary = readObservabilitySummary(config);
+    expect(summary.projects["my-app"]?.metrics["notification_delivery"]?.failure).toBe(1);
+    expect(summary.projects["my-app"]?.health["notification.delivery.desktop"]?.status).toBe(
+      "warn",
+    );
+  });
+
+  it("records missing notifier targets as delivery failures", async () => {
+    const mockSCM = createMockSCM({
+      getPRState: vi.fn().mockResolvedValue("merged"),
+      enrichSessionsPRBatch: mockBatchEnrichment({ state: "merged" }),
+    });
+    const configWithMissingNotifier: OrchestratorConfig = {
+      ...config,
+      notificationRouting: {
+        ...config.notificationRouting,
+        action: ["missing"],
+      },
+    };
+
+    const registry: PluginRegistry = {
+      ...mockRegistry,
+      get: vi.fn().mockImplementation((slot: string) => {
+        if (slot === "runtime") return plugins.runtime;
+        if (slot === "agent") return plugins.agent;
+        if (slot === "scm") return mockSCM;
+        return null;
+      }),
+    };
+
+    const lm = setupCheck("app-1", {
+      session: makeSession({ status: "approved", pr: makePR() }),
+      registry,
+      configOverride: configWithMissingNotifier,
+    });
+
+    await lm.check("app-1");
+
+    expect(recordActivityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "notifier",
+        kind: "notification.target_missing",
+        level: "warn",
+        data: expect.objectContaining({
+          eventType: "merge.completed",
+          targetReference: "missing",
+          targetPlugin: "missing",
+        }),
+      }),
+    );
+
+    const summary = readObservabilitySummary(configWithMissingNotifier);
+    expect(summary.projects["my-app"]?.metrics["notification_delivery"]?.failure).toBe(1);
   });
 
   it("resolves notifier aliases from notificationRouting before dispatch", async () => {
