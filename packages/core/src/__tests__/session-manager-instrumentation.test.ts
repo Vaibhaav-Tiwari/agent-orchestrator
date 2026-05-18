@@ -166,6 +166,80 @@ describe("session.kill_started (MUST)", () => {
 });
 
 describe("session.spawn_failed — orchestrator path (MUST)", () => {
+  it("emits session.spawned after a successful orchestrator spawn", async () => {
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    const session = await sm.spawnOrchestrator({
+      projectId: "my-app",
+      systemPrompt: "be helpful",
+    });
+
+    const events = findAllEvents("session.spawned");
+    const orchestratorSpawned = events.find(
+      (e) => e.data && (e.data as Record<string, unknown>)["role"] === "orchestrator",
+    );
+
+    expect(session.id).toBe("app-orchestrator");
+    expect(orchestratorSpawned).toMatchObject({
+      projectId: "my-app",
+      sessionId: "app-orchestrator",
+      source: "session-manager",
+      kind: "session.spawned",
+      summary: "spawned: app-orchestrator",
+      data: {
+        agent: "mock-agent",
+        branch: "orchestrator/app-orchestrator",
+        role: "orchestrator",
+      },
+    });
+  });
+
+  it("does not emit terminal spawn_failed when ensure recovers a fixed reservation conflict", async () => {
+    let releaseWorkspace: () => void = () => {};
+    const blockingWorkspace = new Promise<void>((resolve) => {
+      releaseWorkspace = resolve;
+    });
+    vi.mocked(ctx.mockWorkspace.create).mockImplementationOnce(async (cfg) => {
+      await blockingWorkspace;
+      return {
+        path: join(ctx.tmpDir, "ws-orchestrator"),
+        branch: cfg.branch,
+        sessionId: cfg.sessionId,
+        projectId: cfg.projectId,
+      };
+    });
+
+    const firstManager = createSessionManager({ config, registry: mockRegistry });
+    const secondManager = createSessionManager({ config, registry: mockRegistry });
+
+    const firstEnsure = firstManager.ensureOrchestrator({
+      projectId: "my-app",
+      systemPrompt: "be helpful",
+    });
+    await vi.waitFor(() => {
+      expect(ctx.mockWorkspace.create).toHaveBeenCalledTimes(1);
+    });
+
+    const secondEnsure = secondManager.ensureOrchestrator({
+      projectId: "my-app",
+      systemPrompt: "be helpful",
+    });
+    await vi.waitFor(() => {
+      expect(findEvent("session.orchestrator_conflict")).toBeDefined();
+    });
+
+    releaseWorkspace();
+    const [created, recovered] = await Promise.all([firstEnsure, secondEnsure]);
+
+    expect(created.id).toBe("app-orchestrator");
+    expect(recovered.id).toBe("app-orchestrator");
+    expect(findAllEvents("session.orchestrator_conflict")).toHaveLength(1);
+    expect(
+      findAllEvents("session.spawn_failed").filter(
+        (e) => e.data && (e.data as Record<string, unknown>)["role"] === "orchestrator",
+      ),
+    ).toHaveLength(0);
+  });
+
   it("emits one terminal failure plus one stage failure when workspace.create throws", async () => {
     vi.mocked(ctx.mockWorkspace.create).mockRejectedValue(new Error("disk full"));
 
@@ -358,6 +432,45 @@ describe("session.send_failed (MUST)", () => {
     expect(restoreFailed).toHaveLength(1);
     expect(restoreFailed[0]!.data).toMatchObject({ stage: "workspace_restore" });
     expect(findEvent("session.send_failed")).toBeDefined();
+  });
+
+  it("tags restore-for-delivery timeout restore_failed with ready_timeout stage", async () => {
+    vi.useFakeTimers();
+    try {
+      const wsPath = join(ctx.tmpDir, "send-restore-ready-timeout");
+      mkdirSync(wsPath, { recursive: true });
+      writeTerminatedSession("app-send-timeout", { worktree: wsPath, branch: "feat/send" });
+
+      vi.mocked(ctx.mockRuntime.isAlive).mockImplementation(async (handle) => {
+        return handle.id !== "rt-restored";
+      });
+      vi.mocked(ctx.mockAgent.isProcessRunning).mockImplementation(async (handle) => {
+        return handle.id !== "rt-restored";
+      });
+      vi.mocked(ctx.mockRuntime.create).mockResolvedValue(makeHandle("rt-restored"));
+      vi.mocked(ctx.mockRuntime.getOutput).mockResolvedValue("");
+      vi.mocked(ctx.mockAgent.detectActivity).mockReturnValue("idle");
+
+      const sm = createSessionManager({ config, registry: mockRegistry });
+      const sendPromise = sm.send("app-send-timeout", "hi");
+      const rejection = expect(sendPromise).rejects.toThrow(
+        "restored session did not become ready for delivery",
+      );
+
+      await vi.runAllTimersAsync();
+      await rejection;
+
+      const restoreFailed = findAllEvents("session.restore_failed");
+      expect(restoreFailed).toHaveLength(1);
+      expect(restoreFailed[0]!.data).toMatchObject({
+        stage: "ready_timeout",
+        reason: "restored session did not become ready for delivery",
+        trigger: "send",
+      });
+      expect(findEvent("session.send_failed")).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

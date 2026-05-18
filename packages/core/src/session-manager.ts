@@ -1571,7 +1571,29 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
   }
 
-  async function spawnOrchestrator(orchestratorConfig: OrchestratorSpawnConfig): Promise<Session> {
+  function recordOrchestratorSpawnFailed(
+    orchestratorConfig: OrchestratorSpawnConfig,
+    err: unknown,
+    sessionId?: string,
+  ): void {
+    recordActivityEvent({
+      projectId: orchestratorConfig.projectId,
+      ...(sessionId ? { sessionId } : {}),
+      source: "session-manager",
+      kind: "session.spawn_failed",
+      level: "error",
+      summary: "orchestrator spawn failed",
+      data: {
+        role: "orchestrator",
+        reason: err instanceof Error ? err.message : String(err),
+      },
+    });
+  }
+
+  async function spawnOrchestrator(
+    orchestratorConfig: OrchestratorSpawnConfig,
+    options?: { suppressFixedReservationFailure?: boolean },
+  ): Promise<Session> {
     recordActivityEvent({
       projectId: orchestratorConfig.projectId,
       source: "session-manager",
@@ -1582,17 +1604,15 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     try {
       return await _spawnOrchestratorInner(orchestratorConfig);
     } catch (err) {
-      recordActivityEvent({
-        projectId: orchestratorConfig.projectId,
-        source: "session-manager",
-        kind: "session.spawn_failed",
-        level: "error",
-        summary: "orchestrator spawn failed",
-        data: {
-          role: "orchestrator",
-          reason: err instanceof Error ? err.message : String(err),
-        },
-      });
+      const project = config.projects[orchestratorConfig.projectId];
+      const sessionId = project ? getOrchestratorSessionId(project) : undefined;
+      const shouldSuppressRecoverableConflict =
+        options?.suppressFixedReservationFailure === true &&
+        sessionId !== undefined &&
+        isFixedOrchestratorReservationError(err, sessionId);
+      if (!shouldSuppressRecoverableConflict) {
+        recordOrchestratorSpawnFailed(orchestratorConfig, err, sessionId);
+      }
       throw err;
     }
   }
@@ -2001,6 +2021,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       throw err;
     }
 
+    recordActivityEvent({
+      projectId: orchestratorConfig.projectId,
+      sessionId,
+      source: "session-manager",
+      kind: "session.spawned",
+      summary: `spawned: ${sessionId}`,
+      data: {
+        agent: plugins.agent.name,
+        branch: session.branch ?? undefined,
+        role: "orchestrator",
+      },
+    });
+
     return session;
   }
 
@@ -2069,7 +2102,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
     }
 
     try {
-      return await spawnOrchestrator(orchestratorConfig);
+      return await spawnOrchestrator(orchestratorConfig, {
+        suppressFixedReservationFailure: true,
+      });
     } catch (err) {
       if (!isFixedOrchestratorReservationError(err, sessionId)) {
         throw err;
@@ -2087,6 +2122,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
 
       const concurrent = await waitForConcurrentOrchestrator(sessionId);
       if (concurrent) return concurrent;
+      recordOrchestratorSpawnFailed(orchestratorConfig, err, sessionId);
       throw err;
     }
   }
@@ -2900,7 +2936,7 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           kind: "session.restore_failed",
           level: "error",
           summary: `restore for delivery failed: ${sessionId}`,
-          data: { reason: detail, trigger: "send" },
+          data: { stage: "ready_timeout", reason: detail, trigger: "send" },
         });
         throw new Error(`Cannot send to session ${sessionId}: ${reason} (${detail})`);
       }
