@@ -12,6 +12,7 @@ export type RemoteAuthCredentials = {
 
 const TOKEN_VERSION = "v1";
 const TOKEN_TTL_MS = 5 * 60 * 1000;
+let lastActiveCredentialKey: string | undefined;
 
 function base64UrlEncode(input: string | Buffer): string {
   return Buffer.from(input).toString("base64url");
@@ -26,11 +27,7 @@ function base64UrlDecode(input: string): string | null {
 }
 
 function getTokenSecret(): string | undefined {
-  return (
-    process.env.AO_REMOTE_WS_TOKEN_SECRET?.trim() ||
-    process.env.AO_REMOTE_AUTH_PASSWORD?.trim() ||
-    readConfiguredRemoteAuth().password
-  );
+  return process.env.AO_REMOTE_WS_TOKEN_SECRET?.trim() || undefined;
 }
 
 export function ensureRemoteWsTokenSecret(): string {
@@ -39,6 +36,24 @@ export function ensureRemoteWsTokenSecret(): string {
   const secret = randomBytes(32).toString("base64url");
   process.env.AO_REMOTE_WS_TOKEN_SECRET = secret;
   return secret;
+}
+
+export function rotateRemoteWsTokenSecret(): string {
+  const secret = randomBytes(32).toString("base64url");
+  process.env.AO_REMOTE_WS_TOKEN_SECRET = secret;
+  return secret;
+}
+
+function noteActiveCredentials(credentials: RemoteAuthCredentials): void {
+  const credentialKey = `${credentials.username}\0${credentials.password ?? ""}`;
+  if (lastActiveCredentialKey === undefined) {
+    lastActiveCredentialKey = credentialKey;
+    return;
+  }
+  if (lastActiveCredentialKey !== credentialKey) {
+    rotateRemoteWsTokenSecret();
+    lastActiveCredentialKey = credentialKey;
+  }
 }
 
 export function decodeBasicToken(
@@ -75,29 +90,26 @@ export function activeRemoteAuth(initialConfiguredAuth?: RemoteAuthCredentials):
     (configured.username !== initialConfiguredAuth.username ||
       configured.password !== initialConfiguredAuth.password)
   ) {
+    noteActiveCredentials(configured);
     return configured;
   }
 
-  return {
+  const active = {
     username: process.env.AO_REMOTE_AUTH_USER || initialConfiguredAuth?.username || configured.username,
     password: process.env.AO_REMOTE_AUTH_PASSWORD || initialConfiguredAuth?.password || configured.password,
   };
-}
-
-function credentialFingerprint(credentials: RemoteAuthCredentials, secret: string): string {
-  return createHmac("sha256", secret)
-    .update(`${credentials.username}:${credentials.password ?? ""}`)
-    .digest("base64url");
+  noteActiveCredentials(active);
+  return active;
 }
 
 export function createRemoteWsToken(credentials: RemoteAuthCredentials): string | undefined {
+  noteActiveCredentials(credentials);
   const secret = getTokenSecret();
   if (!secret) return undefined;
 
   const payload = base64UrlEncode(
     JSON.stringify({
       u: credentials.username,
-      c: credentialFingerprint(credentials, secret),
       exp: Date.now() + TOKEN_TTL_MS,
       n: randomBytes(12).toString("base64url"),
     }),
@@ -132,10 +144,9 @@ export function verifyRemoteWsToken(
   if (!rawPayload) return false;
 
   try {
-    const parsed = JSON.parse(rawPayload) as { u?: unknown; c?: unknown; exp?: unknown };
+    const parsed = JSON.parse(rawPayload) as { u?: unknown; exp?: unknown };
     return (
       parsed.u === expectedCredentials.username &&
-      parsed.c === credentialFingerprint(expectedCredentials, secret) &&
       typeof parsed.exp === "number" &&
       parsed.exp >= Date.now()
     );

@@ -26,6 +26,7 @@ const port = Number.parseInt(process.env.PORT ?? "3000", 10);
 const hostname = process.env.HOST || "0.0.0.0";
 
 ensureRemoteWsTokenSecret();
+process.env["AO_TRUST_REMOTE_ADDRESS_HEADER"] = "1";
 
 async function main(): Promise<void> {
   const app = next({ dev: true, dir: pkgRoot, hostname, port });
@@ -33,6 +34,7 @@ async function main(): Promise<void> {
   await app.prepare();
 
   const server = createServer((req, res) => {
+    req.headers["x-ao-remote-address"] = req.socket.remoteAddress ?? "";
     void handle(req, res);
   });
 

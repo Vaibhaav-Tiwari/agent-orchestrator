@@ -49,19 +49,25 @@ function isPublicAsset(pathname: string): boolean {
   );
 }
 
-function isLocalHost(host: string | null): boolean {
-  const rawHost = host ?? "";
-  const bracketEnd = rawHost.indexOf("]");
-  const hostname = (rawHost.startsWith("[") && bracketEnd !== -1
-    ? rawHost.slice(0, bracketEnd + 1)
-    : rawHost.split(":")[0]
-  )?.toLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const normalized = address.toLowerCase();
+  return (
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "::ffff:127.0.0.1" ||
+    normalized.startsWith("127.")
+  );
 }
 
 export function middleware(request: NextRequest) {
   const password = remoteAuthPassword();
-  if (!password || isPublicAsset(request.nextUrl.pathname) || isLocalHost(request.headers.get("host"))) {
+  const requestIp =
+    (request as NextRequest & { ip?: string }).ip ||
+    (process.env["AO_TRUST_REMOTE_ADDRESS_HEADER"] === "1"
+      ? (request.headers.get("x-ao-remote-address") ?? undefined)
+      : undefined);
+  if (!password || isPublicAsset(request.nextUrl.pathname) || isLoopbackAddress(requestIp)) {
     return NextResponse.next();
   }
 

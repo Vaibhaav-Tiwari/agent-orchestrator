@@ -118,6 +118,7 @@ function spawnProcess(
 
 const port = process.env["PORT"] || "3000";
 const hostname = process.env["HOST"] || "0.0.0.0";
+process.env["AO_TRUST_REMOTE_ADDRESS_HEADER"] = "1";
 
 // Start direct terminal WebSocket server (auto-restart on crash)
 spawnProcess("direct-terminal", "node", [resolve(__dirname, "direct-terminal-ws.js")], {
@@ -130,6 +131,7 @@ async function startNextServer(): Promise<void> {
   await app.prepare();
 
   nextServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+    req.headers["x-ao-remote-address"] = req.socket.remoteAddress ?? "";
     void handle(req, res);
   });
 

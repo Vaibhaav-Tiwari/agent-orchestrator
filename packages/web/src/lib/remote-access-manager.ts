@@ -1,7 +1,7 @@
 import "server-only";
 
 import { type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -25,6 +25,7 @@ import {
   spawnManagedDaemonChild,
   type GlobalConfig,
 } from "@aoagents/ao-core";
+import { rotateRemoteWsTokenSecret } from "../../server/remote-auth";
 
 interface RemoteHost {
   url: string;
@@ -41,6 +42,7 @@ export interface RemoteAccessInfo {
 }
 
 let tunnelProcess: ChildProcess | null = null;
+let enableRemoteAccessPromise: Promise<RemoteAccessInfo> | null = null;
 
 type RemoteAccessConfig = {
   username?: string;
@@ -67,6 +69,7 @@ function configuredPassword(config = loadGlobalConfigOrDefault()): string | unde
 function applyRemoteCredentials(username: string, password: string): void {
   process.env["AO_REMOTE_AUTH_USER"] = username;
   process.env["AO_REMOTE_AUTH_PASSWORD"] = password;
+  rotateRemoteWsTokenSecret();
 }
 
 function generatePassword(): string {
@@ -105,19 +108,44 @@ function getCloudflaredDownload(): { url: string; archive: boolean } {
   throw new Error(`Unsupported platform for automatic remote access: ${process.platform}/${arch}`);
 }
 
+async function fetchExpectedCloudflaredChecksum(assetName: string): Promise<string> {
+  const response = await fetch("https://api.github.com/repos/cloudflare/cloudflared/releases/latest", {
+    headers: { Accept: "application/vnd.github+json" },
+  });
+  if (!response.ok) throw new Error(`Failed to fetch cloudflared checksums (${response.status})`);
+
+  const release = (await response.json()) as { body?: unknown };
+  const body = typeof release.body === "string" ? release.body : "";
+  const escapedAssetName = assetName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`${escapedAssetName}:\\s*([a-fA-F0-9]{64})`).exec(body);
+  if (!match?.[1]) throw new Error(`Missing SHA-256 checksum for ${assetName}`);
+  return match[1].toLowerCase();
+}
+
+async function verifyCloudflaredDownload(assetName: string, bytes: Buffer): Promise<void> {
+  const expected = await fetchExpectedCloudflaredChecksum(assetName);
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== expected) {
+    throw new Error(`cloudflared checksum mismatch for ${assetName}`);
+  }
+}
+
 async function downloadCloudflaredBinary(targetPath: string): Promise<void> {
   const { url, archive } = getCloudflaredDownload();
+  const assetName = basename(new URL(url).pathname);
   const targetDir = dirname(targetPath);
   mkdirSync(targetDir, { recursive: true });
 
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Failed to download cloudflared (${response.status})`);
+  const downloadBytes = Buffer.from(await response.arrayBuffer());
+  await verifyCloudflaredDownload(assetName, downloadBytes);
 
   const tempDir = mkdtempSync(resolve(tmpdir(), "ao-cloudflared-"));
   try {
     if (archive) {
       const archivePath = resolve(tempDir, "cloudflared.tgz");
-      writeFileSync(archivePath, Buffer.from(await response.arrayBuffer()));
+      writeFileSync(archivePath, downloadBytes);
       const { execFileSync } = await import("node:child_process");
       execFileSync("tar", ["-xzf", archivePath, "-C", tempDir]);
       const extractedPath = resolve(tempDir, "cloudflared");
@@ -128,7 +156,7 @@ async function downloadCloudflaredBinary(targetPath: string): Promise<void> {
     }
 
     const tempPath = resolve(tempDir, basename(targetPath));
-    writeFileSync(tempPath, Buffer.from(await response.arrayBuffer()));
+    writeFileSync(tempPath, downloadBytes);
     if (!isWindows()) chmodSync(tempPath, 0o755);
     renameSync(tempPath, targetPath);
   } finally {
@@ -237,21 +265,31 @@ async function startCloudflareTunnel(port: string): Promise<{ publicUrl: string;
 }
 
 export async function enableRemoteAccess(): Promise<RemoteAccessInfo> {
+  if (enableRemoteAccessPromise) return enableRemoteAccessPromise;
+
   const existing = getRemoteAccessInfo();
   if (existing.enabled) {
     return { ...existing, password: process.env["AO_REMOTE_AUTH_PASSWORD"] };
   }
 
-  const config = loadGlobalConfigOrDefault();
-  const password = configuredPassword(config) || generatePassword();
-  applyRemoteCredentials(configuredUsername(config), password);
+  enableRemoteAccessPromise = (async () => {
+    const config = loadGlobalConfigOrDefault();
+    const password = configuredPassword(config) || generatePassword();
+    applyRemoteCredentials(configuredUsername(config), password);
 
-  const tunnel = await startCloudflareTunnel(process.env["PORT"] || "3000");
-  tunnelProcess = tunnel.child;
-  process.env["AO_REMOTE_PUBLIC_URL"] = tunnel.publicUrl;
-  process.env["AO_REMOTE_TUNNEL_PID"] = tunnel.child.pid ? String(tunnel.child.pid) : "";
+    const tunnel = await startCloudflareTunnel(process.env["PORT"] || "3000");
+    tunnelProcess = tunnel.child;
+    process.env["AO_REMOTE_PUBLIC_URL"] = tunnel.publicUrl;
+    process.env["AO_REMOTE_TUNNEL_PID"] = tunnel.child.pid ? String(tunnel.child.pid) : "";
 
-  return { ...getRemoteAccessInfo(), password };
+    return { ...getRemoteAccessInfo(), password };
+  })();
+
+  try {
+    return await enableRemoteAccessPromise;
+  } finally {
+    enableRemoteAccessPromise = null;
+  }
 }
 
 export async function disableRemoteAccess(): Promise<RemoteAccessInfo> {

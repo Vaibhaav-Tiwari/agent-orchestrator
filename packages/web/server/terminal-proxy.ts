@@ -67,7 +67,13 @@ export function proxyTerminalUpgrade(
   upstream.on("error", () => {
     socket.destroy();
   });
+  upstream.on("close", () => {
+    socket.destroy();
+  });
   socket.on("error", () => {
+    upstream.destroy();
+  });
+  socket.on("close", () => {
     upstream.destroy();
   });
 

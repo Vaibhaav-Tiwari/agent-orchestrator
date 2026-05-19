@@ -925,18 +925,14 @@ async function runStartup(
     }
 
     spinner.start("Starting dashboard");
-    try {
-      dashboardProcess = await startDashboard(
-        port,
-        webDir,
-        config.configPath,
-        config.terminalPort,
-        config.directTerminalPort,
-        opts?.dev,
-      );
-    } catch (err) {
-      throw err;
-    }
+    dashboardProcess = await startDashboard(
+      port,
+      webDir,
+      config.configPath,
+      config.terminalPort,
+      config.directTerminalPort,
+      opts?.dev,
+    );
     spinner.succeed(`Dashboard starting on http://localhost:${port}`);
     console.log(chalk.dim("  (Dashboard will be ready in a few seconds)\n"));
   }
