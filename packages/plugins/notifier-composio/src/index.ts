@@ -210,11 +210,11 @@ async function loadComposioSDK(apiKey: string): Promise<ComposioToolsClient | nu
           source: "notifier",
           kind: "notifier.dep_missing",
           level: "error",
-          summary: "Composio SDK (composio-core) is not installed",
+          summary: "Composio SDK (@composio/core) is not installed",
           data: {
             plugin: "notifier-composio",
-            package: "composio-core",
-            installHint: "pnpm add composio-core",
+            package: "@composio/core",
+            installHint: "pnpm add @composio/core",
           },
         });
       }
