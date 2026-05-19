@@ -118,7 +118,7 @@ jobs:
               pkgs.forEach(p => body += '"' + p + '": patch\n');
               body += '---\n\nchore: canary build\n';
               require('fs').writeFileSync('.changeset/canary-temp.md', body);
-            SCRIPT
+          SCRIPT
           fi
           pnpm changeset version --snapshot nightly
         env:
