@@ -22,6 +22,8 @@ const nextConfig = {
   serverExternalPackages: [
     "yaml",
     "zod",
+    "@aoagents/ao-core",
+    "better-sqlite3",
   ],
   webpack: (config, { isServer }) => {
     if (process.platform === "win32") {
