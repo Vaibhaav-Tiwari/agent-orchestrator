@@ -66,12 +66,6 @@ export function DegradedProjectState({
           >
             Back to dashboard
           </Link>
-          <Link
-            href={`/projects/${encodeURIComponent(projectId)}/settings`}
-            className="rounded-lg border border-[var(--color-border-default)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-elevated-hover)]"
-          >
-            Edit settings
-          </Link>
         </div>
       </div>
     </div>
