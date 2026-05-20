@@ -7,6 +7,10 @@ dist/
 coverage/
 *.patch
 *-context.md
+# Local/generated investigation artifacts
+.issue-assets/
+handoff/
+artifacts/
 packages/web/screenshots/
 .playwright-cli/
 

@@ -16,22 +16,13 @@
 | [`competitive-analysis-raw.md`](./competitive-analysis-raw.md) | Raw research notes from all 14 competitor sites (Linear, Vercel, Railway, Fly.io, Inngest, Temporal, Grafana, WandB, LangSmith, Retool, Render, PlanetScale, Supabase, GitHub Copilot) |
 | [`design-brief-v1.md`](./design-brief-v1.md) | Original v1 brief (text-only research, pre-Playwright CSS extraction) — kept for reference |
 
-## Screenshots
-
-| File | Description |
-|------|-------------|
-| [`screenshots/linear-homepage.png`](./screenshots/linear-homepage.png) | Linear.app captured via Playwright (311KB) — source for verified CSS token extraction |
-| [`screenshots/railway-homepage.png`](./screenshots/railway-homepage.png) | Railway.app captured via Playwright (444KB) — visual palette reference |
-
----
-
 ## Research Methods
 
 **Phase 1 — Text analysis**: Two parallel research agents analyzed 14 competitor product sites via WebFetch, extracting visual patterns, color systems, and design philosophy from HTML/CSS content.
 
 **Phase 2 — Playwright CSS extraction**: Installed `@playwright/mcp` and extracted live CSS custom properties from [linear.app](https://linear.app) using `document.styleSheets` enumeration. This yielded ground-truth values for Linear's token system — the most rigorous competitive design data available without access to their Figma files.
 
-**Phase 3 — Playwright screenshots**: Captured screenshots of Linear and Railway via headless Chromium for visual reference.
+**Phase 3 — Playwright screenshots**: Captured screenshots of Linear and Railway via headless Chromium for visual reference. The binary captures are intentionally not tracked; regenerate from the live sites if a fresh comparison is needed.
 
 **Phase 4 — Codebase audit**: Read the entire `packages/web/` source (components, types, CSS tokens) to map research recommendations against the actual implementation. Produced implementation audit sections in each brief with prioritized delta tables.
 

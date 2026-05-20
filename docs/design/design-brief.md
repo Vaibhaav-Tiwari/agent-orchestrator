@@ -21,7 +21,7 @@ Primary interaction model: **scan → identify → act**. Not explore, not brows
 
 ### Linear (linear.app) — **Ground truth via CSS extraction**
 
-*Playwright was used to extract exact token values from the live site. See `screenshots/linear-homepage.png`.*
+*Playwright was used to extract exact token values from the live site. Binary screenshot captures are intentionally not tracked; regenerate from the live site if a fresh comparison is needed.*
 
 **Verified color palette:**
 - Body background: `rgb(8, 9, 10)` → `#08090A` — near-pure black with imperceptible warm cast
@@ -84,7 +84,7 @@ Primary interaction model: **scan → identify → act**. Not explore, not brows
 
 ### Railway (railway.app) — **Visually analyzed via screenshot**
 
-*See `screenshots/railway-homepage.png`.*
+*Visual notes were taken from a Playwright capture. Binary screenshot captures are intentionally not tracked; regenerate from the live site if a fresh comparison is needed.*
 
 **Visual palette observations:**
 - Background (hero): Dark desaturated blue-purple, approximately `hsl(250, 24%, 9%)` ≈ `#13111C`
@@ -523,7 +523,7 @@ scrollbar-color: rgba(255,255,255,0.1) transparent;
 ## 4. Inspiration References
 
 ### Linear issue list — *the* density benchmark
-**URL**: https://linear.app (see `screenshots/linear-homepage.png`)
+**URL**: https://linear.app
 **Why**: The product UI visible in Linear's homepage hero screenshot shows exactly the information density and row compactness that ao session cards should match. Issue ID in muted monospace, title truncated, labels as small pill badges, state dot left-aligned. Zero wasted pixels.
 
 ### Vercel deployment list
