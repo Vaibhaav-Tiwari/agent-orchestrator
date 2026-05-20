@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Image from "next/image";
+import QRCode from "qrcode";
 
 interface RemoteHost {
   url: string;
@@ -18,10 +19,6 @@ interface RemoteInfo {
   hosts: RemoteHost[];
 }
 
-function qrImageUrl(data: string, size = 200): string {
-  return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(data)}&margin=10`;
-}
-
 export function RemoteAccessQR() {
   const [info, setInfo] = useState<RemoteInfo | null>(null);
   const [open, setOpen] = useState(false);
@@ -31,6 +28,7 @@ export function RemoteAccessQR() {
   const [username, setUsername] = useState("ao");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,7 +46,9 @@ export function RemoteAccessQR() {
         }
       })
       .catch(() => {});
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const toggle = useCallback(() => setOpen((v) => !v), []);
@@ -98,7 +98,28 @@ export function RemoteAccessQR() {
   const hosts = info?.hosts ?? [];
   const host = hosts[selectedHost] ?? hosts[0];
   const hasMultiple = hosts.length > 1;
-  const qrUrl = host ? qrImageUrl(host.url) : null;
+
+  useEffect(() => {
+    let cancelled = false;
+    setQrDataUrl(null);
+    if (!host?.url) return;
+
+    QRCode.toDataURL(host.url, {
+      width: 200,
+      margin: 2,
+      errorCorrectionLevel: "M",
+    })
+      .then((dataUrl) => {
+        if (!cancelled) setQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setQrDataUrl(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [host?.url]);
 
   return (
     <>
@@ -145,16 +166,23 @@ export function RemoteAccessQR() {
                 onClick={toggle}
                 aria-label="Close"
               >
-                <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <svg
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                >
                   <path d="M18 6L6 18M6 6l12 12" />
                 </svg>
               </button>
             </div>
 
             <div className="remote-qr-modal__body">
-              {qrUrl && host ? (
+              {qrDataUrl && host ? (
                 <Image
-                  src={qrUrl}
+                  src={qrDataUrl}
                   alt={`QR code for ${host.url}`}
                   className="remote-qr-modal__qr"
                   width={200}
@@ -193,6 +221,7 @@ export function RemoteAccessQR() {
                 <label className="remote-qr-modal__credential-field">
                   <span>Password</span>
                   <input
+                    type="password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     autoComplete="current-password"

@@ -5,7 +5,6 @@
  */
 
 import { type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,10 +52,11 @@ type RemoteAccessConfig = {
 
 const globalConfig = loadGlobalConfig(getGlobalConfigPath()) ?? createDefaultGlobalConfig();
 const remoteAccessConfig: RemoteAccessConfig =
-  globalConfig.remoteAccess && typeof globalConfig.remoteAccess === "object" ? globalConfig.remoteAccess : {};
+  globalConfig.remoteAccess && typeof globalConfig.remoteAccess === "object"
+    ? globalConfig.remoteAccess
+    : {};
 process.env["AO_REMOTE_AUTH_USER"] ||= remoteAccessConfig.username?.trim() || "ao";
-process.env["AO_REMOTE_AUTH_PASSWORD"] ||=
-  remoteAccessConfig.password?.trim() || randomBytes(18).toString("base64url");
+process.env["AO_REMOTE_AUTH_PASSWORD"] ||= remoteAccessConfig.password?.trim() || "";
 ensureRemoteWsTokenSecret();
 
 function log(label: string, msg: string): void {

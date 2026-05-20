@@ -25,7 +25,6 @@ import {
   spawnManagedDaemonChild,
   type GlobalConfig,
 } from "@aoagents/ao-core";
-import { rotateRemoteWsTokenSecret } from "../../server/remote-auth";
 
 interface RemoteHost {
   url: string;
@@ -62,14 +61,14 @@ function configuredUsername(config = loadGlobalConfigOrDefault()): string {
 }
 
 function configuredPassword(config = loadGlobalConfigOrDefault()): string | undefined {
-  const password = remoteAccessConfig(config).password?.trim() || process.env["AO_REMOTE_AUTH_PASSWORD"];
+  const password =
+    remoteAccessConfig(config).password?.trim() || process.env["AO_REMOTE_AUTH_PASSWORD"];
   return password && password.length > 0 ? password : undefined;
 }
 
 function applyRemoteCredentials(username: string, password: string): void {
   process.env["AO_REMOTE_AUTH_USER"] = username;
   process.env["AO_REMOTE_AUTH_PASSWORD"] = password;
-  rotateRemoteWsTokenSecret();
 }
 
 function generatePassword(): string {
@@ -81,7 +80,12 @@ function tryCloudflareUrl(line: string): string | null {
 }
 
 function getCloudflaredCachePath(): string {
-  return resolve(homedir(), ".agent-orchestrator", "bin", isWindows() ? "cloudflared.exe" : "cloudflared");
+  return resolve(
+    homedir(),
+    ".agent-orchestrator",
+    "bin",
+    isWindows() ? "cloudflared.exe" : "cloudflared",
+  );
 }
 
 function getCloudflaredDownload(): { url: string; archive: boolean } {
@@ -109,15 +113,18 @@ function getCloudflaredDownload(): { url: string; archive: boolean } {
 }
 
 async function fetchExpectedCloudflaredChecksum(assetName: string): Promise<string> {
-  const response = await fetch("https://api.github.com/repos/cloudflare/cloudflared/releases/latest", {
-    headers: { Accept: "application/vnd.github+json" },
-  });
+  const response = await fetch(
+    "https://api.github.com/repos/cloudflare/cloudflared/releases/latest",
+    {
+      headers: { Accept: "application/vnd.github+json" },
+    },
+  );
   if (!response.ok) throw new Error(`Failed to fetch cloudflared checksums (${response.status})`);
 
   const release = (await response.json()) as { body?: unknown };
   const body = typeof release.body === "string" ? release.body : "";
   const escapedAssetName = assetName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`${escapedAssetName}:\\s*([a-fA-F0-9]{64})`).exec(body);
+  const match = new RegExp(`^${escapedAssetName}:\\s*([a-fA-F0-9]{64})`, "m").exec(body);
   if (!match?.[1]) throw new Error(`Missing SHA-256 checksum for ${assetName}`);
   return match[1].toLowerCase();
 }
@@ -149,7 +156,8 @@ async function downloadCloudflaredBinary(targetPath: string): Promise<void> {
       const { execFileSync } = await import("node:child_process");
       execFileSync("tar", ["-xzf", archivePath, "-C", tempDir]);
       const extractedPath = resolve(tempDir, "cloudflared");
-      if (!existsSync(extractedPath)) throw new Error("cloudflared archive did not contain a binary");
+      if (!existsSync(extractedPath))
+        throw new Error("cloudflared archive did not contain a binary");
       chmodSync(extractedPath, 0o755);
       renameSync(extractedPath, targetPath);
       return;
@@ -214,7 +222,9 @@ export function saveRemoteAccessCredentials(input: {
   return getRemoteAccessInfo();
 }
 
-async function startCloudflareTunnel(port: string): Promise<{ publicUrl: string; child: ChildProcess }> {
+async function startCloudflareTunnel(
+  port: string,
+): Promise<{ publicUrl: string; child: ChildProcess }> {
   const cloudflared = await resolveCloudflaredBinary();
   const child = spawnManagedDaemonChild(
     "remote-tunnel",
@@ -230,7 +240,11 @@ async function startCloudflareTunnel(port: string): Promise<{ publicUrl: string;
       if (settled) return;
       settled = true;
       child.kill();
-      reject(new Error(`Timed out waiting for cloudflared.${recentOutput ? ` Last output: ${recentOutput.trim()}` : ""}`));
+      reject(
+        new Error(
+          `Timed out waiting for cloudflared.${recentOutput ? ` Last output: ${recentOutput.trim()}` : ""}`,
+        ),
+      );
     }, 30_000);
 
     function settle(publicUrl: string) {
@@ -259,7 +273,11 @@ async function startCloudflareTunnel(port: string): Promise<{ publicUrl: string;
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      reject(new Error(`cloudflared exited before creating a tunnel${code === null ? "" : ` (${code})`}`));
+      reject(
+        new Error(
+          `cloudflared exited before creating a tunnel${code === null ? "" : ` (${code})`}`,
+        ),
+      );
     });
   });
 }

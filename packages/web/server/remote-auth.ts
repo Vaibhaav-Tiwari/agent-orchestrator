@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   createDefaultGlobalConfig,
   getGlobalConfigPath,
@@ -12,7 +12,6 @@ export type RemoteAuthCredentials = {
 
 const TOKEN_VERSION = "v1";
 const TOKEN_TTL_MS = 5 * 60 * 1000;
-let lastActiveCredentialKey: string | undefined;
 
 function base64UrlEncode(input: string | Buffer): string {
   return Buffer.from(input).toString("base64url");
@@ -44,16 +43,12 @@ export function rotateRemoteWsTokenSecret(): string {
   return secret;
 }
 
-function noteActiveCredentials(credentials: RemoteAuthCredentials): void {
-  const credentialKey = `${credentials.username}\0${credentials.password ?? ""}`;
-  if (lastActiveCredentialKey === undefined) {
-    lastActiveCredentialKey = credentialKey;
-    return;
-  }
-  if (lastActiveCredentialKey !== credentialKey) {
-    rotateRemoteWsTokenSecret();
-    lastActiveCredentialKey = credentialKey;
-  }
+function credentialDigest(credentials: RemoteAuthCredentials): string {
+  return createHash("sha256")
+    .update(credentials.username)
+    .update("\0")
+    .update(credentials.password ?? "")
+    .digest("base64url");
 }
 
 export function decodeBasicToken(
@@ -83,33 +78,35 @@ export function readConfiguredRemoteAuth(): RemoteAuthCredentials {
   };
 }
 
-export function activeRemoteAuth(initialConfiguredAuth?: RemoteAuthCredentials): RemoteAuthCredentials {
+export function activeRemoteAuth(
+  initialConfiguredAuth?: RemoteAuthCredentials,
+): RemoteAuthCredentials {
   const configured = readConfiguredRemoteAuth();
   if (
     initialConfiguredAuth &&
     (configured.username !== initialConfiguredAuth.username ||
       configured.password !== initialConfiguredAuth.password)
   ) {
-    noteActiveCredentials(configured);
     return configured;
   }
 
   const active = {
-    username: process.env.AO_REMOTE_AUTH_USER || initialConfiguredAuth?.username || configured.username,
-    password: process.env.AO_REMOTE_AUTH_PASSWORD || initialConfiguredAuth?.password || configured.password,
+    username:
+      process.env.AO_REMOTE_AUTH_USER || initialConfiguredAuth?.username || configured.username,
+    password:
+      process.env.AO_REMOTE_AUTH_PASSWORD || initialConfiguredAuth?.password || configured.password,
   };
-  noteActiveCredentials(active);
   return active;
 }
 
 export function createRemoteWsToken(credentials: RemoteAuthCredentials): string | undefined {
-  noteActiveCredentials(credentials);
   const secret = getTokenSecret();
   if (!secret) return undefined;
 
   const payload = base64UrlEncode(
     JSON.stringify({
       u: credentials.username,
+      c: credentialDigest(credentials),
       exp: Date.now() + TOKEN_TTL_MS,
       n: randomBytes(12).toString("base64url"),
     }),
@@ -144,9 +141,10 @@ export function verifyRemoteWsToken(
   if (!rawPayload) return false;
 
   try {
-    const parsed = JSON.parse(rawPayload) as { u?: unknown; exp?: unknown };
+    const parsed = JSON.parse(rawPayload) as { u?: unknown; c?: unknown; exp?: unknown };
     return (
       parsed.u === expectedCredentials.username &&
+      parsed.c === credentialDigest(expectedCredentials) &&
       typeof parsed.exp === "number" &&
       parsed.exp >= Date.now()
     );
