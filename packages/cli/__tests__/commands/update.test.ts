@@ -570,13 +570,15 @@ describe("update command", () => {
       );
       Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
       Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
-      mockGetRunning.mockResolvedValue({
-        pid: 12345,
-        configPath: "/tmp/test-global-config.yaml",
-        port: 3000,
-        startedAt: new Date().toISOString(),
-        projects: ["my-app"],
-      });
+      mockGetRunning
+        .mockResolvedValueOnce({
+          pid: 12345,
+          configPath: "/tmp/test-global-config.yaml",
+          port: 3000,
+          startedAt: new Date().toISOString(),
+          projects: ["my-app"],
+        })
+        .mockResolvedValue(null);
       mockLoadConfig.mockImplementation((path?: string) => ({
         projects: { "my-app": { path: "/tmp/foo" } },
         configPath: path ?? "/cwd/agent-orchestrator.yaml",
@@ -618,6 +620,7 @@ describe("update command", () => {
     });
 
     it("does not stop/start when no daemon or active sessions exist", async () => {
+      mockGetRunning.mockReset();
       mockGetRunning.mockResolvedValue(null);
       mockExistsSync.mockReturnValue(false);
       mockSessions.value = [];
@@ -653,7 +656,30 @@ describe("update command", () => {
       ]);
     });
 
+    it("aborts before install if ao stop exits 0 but AO still appears active", async () => {
+      mockGetRunning.mockResolvedValue({
+        pid: 12345,
+        configPath: "/tmp/test-global-config.yaml",
+        port: 3000,
+        startedAt: new Date().toISOString(),
+        projects: ["my-app"],
+      });
+      mockSpawn.mockReturnValue(createMockChild(0, undefined, { stdout: "" }));
+
+      await expect(program.parseAsync(["node", "test", "update"])).rejects.toThrow(
+        "process.exit(1)",
+      );
+
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(mockSpawn.mock.calls[0][0]).toBe("ao");
+      expect(mockSpawn.mock.calls[0][1]).toEqual(["stop", "--yes"]);
+      expect(mockSpawn.mock.calls.some((call) => call[0] === "pnpm")).toBe(false);
+      const stderr = vi.mocked(console.error).mock.calls.map((c) => String(c[0])).join("\n");
+      expect(stderr).toContain("AO still appears to be running after `ao stop --yes`");
+    });
+
     it("prints a friendly pnpm diagnostic and npm fallback when pnpm fails", async () => {
+      mockGetRunning.mockReset();
       mockGetRunning.mockResolvedValue(null);
       mockExistsSync.mockReturnValue(false);
       mockSpawn.mockReturnValue(
@@ -955,13 +981,16 @@ describe("update command", () => {
 
     it("orchestrates stop/install/verify/start when active sessions exist and update is API-invoked", async () => {
       mockSessions.value = [{ id: "feat-1", status: "working" }];
-      mockGetRunning.mockResolvedValue({
-        pid: 12345,
-        configPath: "/tmp/test-global-config.yaml",
-        port: 3000,
-        startedAt: new Date().toISOString(),
-        projects: ["my-app"],
-      });
+      mockExistsSync.mockReturnValue(false);
+      mockGetRunning
+        .mockResolvedValueOnce({
+          pid: 12345,
+          configPath: "/tmp/test-global-config.yaml",
+          port: 3000,
+          startedAt: new Date().toISOString(),
+          projects: ["my-app"],
+        })
+        .mockResolvedValue(null);
 
       await program.parseAsync(["node", "test", "update"]);
 

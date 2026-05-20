@@ -245,6 +245,37 @@ async function pauseAoForUpdate(plan: UpdateLifecyclePlan): Promise<boolean> {
     process.exit(stopExit);
   }
 
+  const afterStop = await getUpdateLifecyclePlan();
+  if (afterStop.runningBeforeUpdate || afterStop.activeSessions.length > 0) {
+    recordActivityEvent({
+      source: "cli",
+      kind: "cli.update_failed",
+      level: "error",
+      summary: `ao update failed: AO still appears active after internal ao stop`,
+      data: {
+        runningAfterStop: afterStop.runningBeforeUpdate,
+        activeSessionCount: afterStop.activeSessions.length,
+        activeSessionIds: afterStop.activeSessions.map((s) => s.id).slice(0, 20),
+      },
+    });
+    console.error(
+      chalk.red(
+        "\nAO update stopped before installing because AO still appears to be running after `ao stop --yes`.",
+      ),
+    );
+    if (afterStop.activeSessions.length > 0) {
+      console.error(chalk.dim("Still-active sessions:"));
+      for (const s of afterStop.activeSessions.slice(0, 5)) {
+        console.error(chalk.dim(`    • ${s.id}  (${s.status})`));
+      }
+      if (afterStop.activeSessions.length > 5) {
+        console.error(chalk.dim(`    … and ${afterStop.activeSessions.length - 5} more`));
+      }
+    }
+    console.error(chalk.dim("Run `ao stop` and retry `ao update` after AO is fully stopped."));
+    process.exit(1);
+  }
+
   return true;
 }
 
