@@ -392,6 +392,15 @@ export function _resetBatchEnrichPRFailedEmittedForTesting(): void {
 export const MAX_BATCH_SIZE = 25;
 
 /**
+ * Maximum number of status check contexts to include per PR in the GraphQL batch.
+ * Covers AO's current 18-check CI with small headroom while keeping batch cost bounded.
+ * At MAX_BATCH_SIZE (25 PRs), this yields at most 20 × 25 = 500 context nodes per query,
+ * well within GitHub's per-call node limits.
+ * Repos with more contexts still fall back safely via pageInfo.hasNextPage.
+ */
+export const CI_CONTEXTS_FIRST = 20;
+
+/**
  * Check if an HTTP response contains a 304 Not Modified status.
  * Handles HTTP/1.1, HTTP/2, and HTTP/2.0 status lines.
  */
@@ -647,11 +656,10 @@ const PR_FIELDS = `
       commit {
         statusCheckRollup {
           state
-          # 11 keeps per-PR node cost under budget for 25-PR batch queries
-          # (total cost ≤5000). Repos with >11 checks lose individual check
-          # visibility, but the rollup "state" still reflects all checks —
-          # overall pass/fail detection remains correct.
-          contexts(first: 11) {
+          # Fetch enough contexts for AO's normal 18-check CI while keeping
+          # the per-PR node cost bounded. If more contexts exist, pageInfo
+          # forces REST fallback for complete individual check details.
+          contexts(first: ${CI_CONTEXTS_FIRST}) {
             nodes {
               ... on CheckRun {
                 name
@@ -897,9 +905,9 @@ function parseCIState(statusCheckRollup: unknown): CIStatus {
   const rollup = statusCheckRollup as Record<string, unknown>;
   const state = typeof rollup["state"] === "string" ? rollup["state"].toUpperCase() : "";
 
-  // Map GitHub's statusCheckRollup.state to our CIStatus enum
-  // This top-level state aggregates all individual checks and is
-  // significantly cheaper than fetching contexts (10 points vs 50+ per PR)
+  // Map GitHub's statusCheckRollup.state to our CIStatus enum.
+  // This top-level state aggregates all individual checks; individual context
+  // details are parsed separately and only trusted when the page is complete.
   if (state === "SUCCESS") return "passing";
   if (state === "FAILURE") return "failing";
   if (state === "ERROR") return "failing";
@@ -984,10 +992,10 @@ function extractPREnrichment(
   const statusCheckRollup = commits?.nodes?.[0]?.commit?.statusCheckRollup;
   const ciStatus = statusCheckRollup ? parseCIState(statusCheckRollup) : "none";
 
-  // Only include ciChecks when the list is complete (no truncation).
-  // contexts(first: 20) silently truncates PRs with >20 checks — when truncated,
-  // the failing check may be missing, so we set ciChecks to undefined to force
-  // the getCIChecks() REST fallback in maybeDispatchCIFailureDetails.
+  // Only include ciChecks when the bounded contexts page is complete.
+  // GitHub silently truncates larger context lists — when truncated, the failing
+  // check may be missing, so set ciChecks to undefined to force the getCIChecks()
+  // REST fallback in maybeDispatchCIFailureDetails.
   const contextsField = statusCheckRollup?.["contexts"] as Record<string, unknown> | undefined;
   const pageInfo = contextsField?.["pageInfo"];
   const contextsHasNextPage =

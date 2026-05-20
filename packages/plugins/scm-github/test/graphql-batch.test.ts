@@ -1,10 +1,9 @@
 /**
  * Unit tests for GraphQL batch PR enrichment.
  *
- * Note: The GraphQL batch query was optimized to use only the top-level
- * statusCheckRollup.state field instead of fetching individual contexts.
- * This reduces GraphQL API cost from ~50 points to ~10 points per PR while
- * providing the same semantic information for CI status determination.
+ * Note: The GraphQL batch query uses the top-level statusCheckRollup.state
+ * field for overall CI status and fetches a bounded contexts page for
+ * individual check details when the page is complete.
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -13,6 +12,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   generateBatchQuery,
   MAX_BATCH_SIZE,
+  CI_CONTEXTS_FIRST,
   parseCIState,
   parseReviewDecision,
   parsePRState,
@@ -164,6 +164,7 @@ describe("GraphQL Batch Query Generation", () => {
     expect(query).toContain("reviewDecision");
     expect(query).toContain("commits");
     expect(query).toContain("statusCheckRollup");
+    expect(query).toContain(`contexts(first: ${CI_CONTEXTS_FIRST})`);
   });
 
   it("should use sequential numeric aliases", () => {
@@ -277,9 +278,9 @@ describe("CI State Parsing", () => {
     expect(parseCIState({ state: "EXPECTED" })).toBe("pending");
   });
 
-  it("should parse individual contexts for detailed state", () => {
-    // After optimization, we no longer fetch individual contexts.
-    // The top-level state provides the same semantic information.
+  it("should use aggregate state even when individual contexts are present", () => {
+    // The top-level state provides overall CI status. Individual context
+    // details are parsed separately for ciChecks when the page is complete.
     expect(parseCIState({
       state: "PENDING",
       contexts: {
@@ -719,9 +720,13 @@ describe("PR Enrichment Data Extraction", () => {
   });
 });
 
-describe("MAX_BATCH_SIZE constant", () => {
-  it("should be defined as 25", () => {
+describe("GraphQL batch sizing constants", () => {
+  it("should keep PR batches at 25 for optimal batch sizing", () => {
     expect(MAX_BATCH_SIZE).toBe(25);
+  });
+
+  it("should request enough CI contexts for AO's 18-check CI", () => {
+    expect(CI_CONTEXTS_FIRST).toBe(20);
   });
 });
 
@@ -1743,7 +1748,7 @@ describe("extractPREnrichment ciChecks", () => {
                 contexts: {
                   nodes: [
                     { name: "check-1", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: null },
-                    // ... 19 more checks truncated
+                    // ... more checks truncated beyond CI_CONTEXTS_FIRST
                   ],
                   pageInfo: { hasNextPage: true }, // list was truncated!
                 },
