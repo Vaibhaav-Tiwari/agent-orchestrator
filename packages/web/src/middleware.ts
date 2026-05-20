@@ -60,6 +60,14 @@ function isLoopbackAddress(address: string | undefined): boolean {
   );
 }
 
+function hasProxyHeaders(request: NextRequest): boolean {
+  return (
+    request.headers.has("x-forwarded-for") ||
+    request.headers.has("x-real-ip") ||
+    request.headers.has("cf-connecting-ip")
+  );
+}
+
 export function middleware(request: NextRequest) {
   const password = remoteAuthPassword();
   const requestIp =
@@ -67,7 +75,8 @@ export function middleware(request: NextRequest) {
     (process.env["AO_TRUST_REMOTE_ADDRESS_HEADER"] === "1"
       ? (request.headers.get("x-ao-remote-address") ?? undefined)
       : undefined);
-  if (!password || isPublicAsset(request.nextUrl.pathname) || isLoopbackAddress(requestIp)) {
+  const allowLoopbackBypass = isLoopbackAddress(requestIp) && !hasProxyHeaders(request);
+  if (!password || isPublicAsset(request.nextUrl.pathname) || allowLoopbackBypass) {
     return NextResponse.next();
   }
 

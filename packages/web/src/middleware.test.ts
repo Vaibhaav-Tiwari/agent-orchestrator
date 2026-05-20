@@ -84,6 +84,36 @@ describe("remote auth middleware", () => {
     expect(response.status).toBe(200);
   });
 
+  it("requires credentials for proxied requests even when the socket is loopback", () => {
+    vi.stubEnv("AO_REMOTE_AUTH_USER", "ao");
+    vi.stubEnv("AO_REMOTE_AUTH_PASSWORD", "secret");
+    vi.stubEnv("AO_TRUST_REMOTE_ADDRESS_HEADER", "1");
+
+    const response = middleware(
+      request("/api/projects", undefined, {
+        "x-ao-remote-address": "127.0.0.1",
+        "x-forwarded-for": "203.0.113.10",
+      }),
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  it("requires credentials for Cloudflare-proxied requests from loopback", () => {
+    vi.stubEnv("AO_REMOTE_AUTH_USER", "ao");
+    vi.stubEnv("AO_REMOTE_AUTH_PASSWORD", "secret");
+    vi.stubEnv("AO_TRUST_REMOTE_ADDRESS_HEADER", "1");
+
+    const response = middleware(
+      request("/api/projects", undefined, {
+        "x-ao-remote-address": "::1",
+        "cf-connecting-ip": "203.0.113.10",
+      }),
+    );
+
+    expect(response.status).toBe(401);
+  });
+
   it("ignores the loopback socket header unless the AO server marked it trusted", () => {
     vi.stubEnv("AO_REMOTE_AUTH_USER", "ao");
     vi.stubEnv("AO_REMOTE_AUTH_PASSWORD", "secret");
