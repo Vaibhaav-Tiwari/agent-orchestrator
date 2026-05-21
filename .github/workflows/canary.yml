@@ -113,11 +113,22 @@ jobs:
           if [ -z "$(ls .changeset/*.md 2>/dev/null | grep -vi 'README')" ]; then
             node << 'SCRIPT'
               const cfg = require('./.changeset/config.json');
-              const pkgs = cfg.linked.flat();
+              const glob = require('glob');
+              const fs = require('fs');
+              const linked = new Set(cfg.linked.flat());
+              const pkgs = [];
+              for (const m of glob.sync('packages/*/package.json')) {
+                const d = JSON.parse(fs.readFileSync(m, 'utf8'));
+                if (d.publishConfig?.access === 'public') pkgs.push(d.name);
+              }
+              for (const m of glob.sync('packages/plugins/*/package.json')) {
+                const d = JSON.parse(fs.readFileSync(m, 'utf8'));
+                if (d.publishConfig?.access === 'public') pkgs.push(d.name);
+              }
               let body = '---\n';
               pkgs.forEach(p => body += '"' + p + '": patch\n');
               body += '---\n\nchore: canary build\n';
-              require('fs').writeFileSync('.changeset/canary-temp.md', body);
+              fs.writeFileSync('.changeset/canary-temp.md', body);
           SCRIPT
           fi
           pnpm changeset version --snapshot nightly
