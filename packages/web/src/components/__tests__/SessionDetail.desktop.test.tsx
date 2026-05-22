@@ -223,6 +223,32 @@ describe("SessionDetail desktop layout", () => {
       "/projects/my-app",
     );
     expect(screen.queryByTestId("direct-terminal")).not.toBeInTheDocument();
+    // The ended-session body also exposes a prominent "Restore session" button
+    // so users don't have to find the small icon in the header.
+    expect(
+      within(screen.getByRole("region", { name: "Session ended summary" })).getByRole("button", {
+        name: "Restore session",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the Restore button in the ended-summary for pr_merged sessions (status=cleanup)", () => {
+    render(
+      <SessionDetail
+        session={makeSession({
+          id: "worker-pr-merged",
+          projectId: "my-app",
+          status: "cleanup",
+          activity: "exited",
+          pr: makePR({ number: 1904, state: "merged" }),
+        })}
+      />,
+    );
+    expect(
+      within(screen.getByRole("region", { name: "Session ended summary" })).getByRole("button", {
+        name: "Restore session",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("keeps restored working sessions live when terminatedAt is stale", () => {
@@ -271,7 +297,61 @@ describe("SessionDetail desktop layout", () => {
     );
   });
 
-  it("shows restore for restorable orchestrator sessions", () => {
+  it("does not open a blank terminal when activity exited but lifecycle still reports alive", () => {
+    render(
+      <SessionDetail
+        session={makeSession({
+          id: "worker-review-ended",
+          projectId: "my-app",
+          status: "review_pending",
+          activity: "exited",
+          summary: "Worker exited after opening a PR",
+          pr: null,
+          lifecycle: {
+            sessionState: "idle",
+            sessionReason: "awaiting_external_review",
+            prState: "open",
+            prReason: "review_pending",
+            runtimeState: "alive",
+            runtimeReason: "process_running",
+            session: {
+              state: "idle",
+              reason: "awaiting_external_review",
+              label: "idle",
+              reasonLabel: "awaiting external review",
+            },
+            pr: {
+              state: "open",
+              reason: "review_pending",
+              label: "open",
+              reasonLabel: "review pending",
+            },
+            runtime: {
+              state: "alive",
+              reason: "process_running",
+              label: "alive",
+              reasonLabel: "process running",
+            },
+            legacyStatus: "review_pending",
+            evidence: null,
+            detectingAttempts: 0,
+            detectingEscalatedAt: null,
+            summary: "Waiting for external review",
+            guidance: null,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "Session ended summary" })).toBeInTheDocument();
+    expect(screen.getByText("Terminal ended")).toBeInTheDocument();
+    expect(screen.queryByTestId("direct-terminal")).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("banner")).getByRole("button", { name: "Restore" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps restore in the ended summary but not the top bar for restorable orchestrators", () => {
     render(
       <SessionDetail
         session={makeSession({
@@ -296,39 +376,28 @@ describe("SessionDetail desktop layout", () => {
       />,
     );
 
-    expect(within(screen.getByRole("banner")).getByRole("button", { name: "Restore" })).toHaveClass(
-      "dashboard-app-btn--restore",
-    );
+    expect(
+      within(screen.getByRole("banner")).queryByRole("button", { name: "Restore" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Session ended summary" })).getByRole("button", {
+        name: "Restore session",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("banner")).getByRole("link", { name: "Open Kanban" }),
+    ).toHaveAttribute("href", "/projects/my-app");
+    expect(
+      within(screen.getByRole("banner")).queryByRole("button", {
+        name: /launch orchestrator \(clean context\)/i,
+      }),
+    ).not.toBeInTheDocument();
     expect(
       within(screen.getByRole("banner")).queryByRole("button", { name: "Kill" }),
     ).not.toBeInTheDocument();
   });
 
-  it("renders Relaunch (clean) on live orchestrator sessions and navigates to the new session", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const hrefSetter = vi.fn();
-    Object.defineProperty(window, "location", {
-      value: {
-        ...window.location,
-        set href(value: string) {
-          hrefSetter(value);
-        },
-      },
-      writable: true,
-    });
-    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input.toString();
-      if (url === "/api/orchestrators") {
-        return {
-          ok: true,
-          json: async () => ({
-            orchestrator: { id: "my-app-orchestrator", projectId: "my-app" },
-          }),
-        } as Response;
-      }
-      return { ok: true, json: async () => ({}), text: async () => "" } as Response;
-    });
-
+  it("renders a scoped, non-repetitive orchestrator top bar", () => {
     render(
       <SessionDetail
         session={makeSession({
@@ -336,110 +405,73 @@ describe("SessionDetail desktop layout", () => {
           projectId: "my-app",
           status: "working",
           activity: "active",
+          branch: "orchestrator/my-app-orchestrator",
           summary: "Project orchestrator",
+          displayName: "# My App Orchestrator",
+          pr: makePR({ number: 777 }),
         })}
         isOrchestrator
         orchestratorZones={{
           merge: 0,
           respond: 0,
-          review: 0,
-          pending: 0,
-          working: 0,
-          done: 0,
+          review: 1,
+          pending: 2,
+          working: 1,
+          done: 4,
         }}
         projectOrchestratorId="my-app-orchestrator"
         projects={[{ id: "my-app", name: "My App", path: "/tmp/my-app" }]}
       />,
     );
 
-    const relaunchBtn = within(screen.getByRole("banner")).getByRole("button", {
-      name: /launch orchestrator \(clean context\)/i,
-    });
-    fireEvent.click(relaunchBtn);
+    const banner = within(screen.getByRole("banner"));
 
-    expect(confirmSpy).toHaveBeenCalled();
-    await act(async () => {});
-
-    expect(global.fetch).toHaveBeenCalledWith("/api/orchestrators", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId: "my-app", clean: true }),
-    });
-    expect(hrefSetter).toHaveBeenCalledWith("/projects/my-app/sessions/my-app-orchestrator");
-
-    confirmSpy.mockRestore();
-  });
-
-  it("keeps Relaunch (clean) visible on terminated orchestrator sessions", () => {
-    render(
-      <SessionDetail
-        session={makeSession({
-          id: "my-app-orchestrator",
-          projectId: "my-app",
-          status: "terminated",
-          activity: "exited",
-          summary: "Project orchestrator",
-          pr: null,
-        })}
-        isOrchestrator
-        orchestratorZones={{ merge: 0, respond: 0, review: 0, pending: 0, working: 0, done: 0 }}
-        projectOrchestratorId="my-app-orchestrator"
-        projects={[{ id: "my-app", name: "My App", path: "/tmp/my-app" }]}
-      />,
+    expect(banner.getByText("My App")).toBeInTheDocument();
+    expect(banner.getByText("Orchestrator")).toBeInTheDocument();
+    expect(banner.getByText("Active")).toBeInTheDocument();
+    expect(banner.getByText("Fleet")).toBeInTheDocument();
+    expect(banner.getByText("review")).toBeInTheDocument();
+    expect(banner.getByText("working")).toBeInTheDocument();
+    expect(banner.getByText("pending")).toBeInTheDocument();
+    expect(banner.getByText("done")).toBeInTheDocument();
+    expect(banner.queryByText("my-app-orchestrator")).not.toBeInTheDocument();
+    expect(banner.getByRole("link", { name: "Open Kanban" })).toHaveAttribute(
+      "href",
+      "/projects/my-app",
     );
-
-    expect(
-      within(screen.getByRole("banner")).getByRole("button", {
-        name: /launch orchestrator \(clean context\)/i,
-      }),
-    ).toBeInTheDocument();
+    expect(banner.queryByText("Agent Orchestrator")).not.toBeInTheDocument();
+    expect(banner.queryByText("# My App Orchestrator")).not.toBeInTheDocument();
+    expect(banner.queryByText("orchestrator/my-app-orchestrator")).not.toBeInTheDocument();
+    expect(banner.queryByRole("link", { name: "PR #777" })).not.toBeInTheDocument();
   });
 
-  it("surfaces a relaunch error banner when POST fails after confirm", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input.toString();
-      if (url === "/api/orchestrators") {
-        return {
-          ok: false,
-          status: 500,
-          json: async () => ({ error: "kill+respawn failed" }),
-          text: async () => "kill+respawn failed",
-        } as Response;
-      }
-      return { ok: true, json: async () => ({}), text: async () => "" } as Response;
-    });
-
+  it("shows the project name for the Agent Orchestrator project header", () => {
     render(
       <SessionDetail
         session={makeSession({
-          id: "my-app-orchestrator",
-          projectId: "my-app",
+          id: "ao-orchestrator",
+          projectId: "agent-orchestrator",
           status: "working",
-          activity: "active",
+          activity: "ready",
           summary: "Project orchestrator",
         })}
         isOrchestrator
-        orchestratorZones={{ merge: 0, respond: 0, review: 0, pending: 0, working: 0, done: 0 }}
-        projectOrchestratorId="my-app-orchestrator"
-        projects={[{ id: "my-app", name: "My App", path: "/tmp/my-app" }]}
+        orchestratorZones={{ merge: 0, respond: 0, review: 0, pending: 0, working: 1, done: 2 }}
+        projectOrchestratorId="ao-orchestrator"
+        projects={[
+          { id: "agent-orchestrator", name: "Agent Orchestrator", path: "/tmp/agent-orchestrator" },
+        ]}
       />,
     );
 
-    fireEvent.click(
-      within(screen.getByRole("banner")).getByRole("button", {
-        name: /launch orchestrator \(clean context\)/i,
-      }),
+    const banner = within(screen.getByRole("banner"));
+
+    expect(banner.getByText("Agent Orchestrator")).toBeInTheDocument();
+    expect(banner.getByText("Orchestrator")).toHaveClass("session-detail-mode-badge--neutral");
+    expect(banner.getByRole("link", { name: "Open Kanban" })).toHaveAttribute(
+      "href",
+      "/projects/agent-orchestrator",
     );
-
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/kill\+respawn failed/i);
-    expect(alert).toHaveTextContent(/previous orchestrator may already be terminated/i);
-
-    fireEvent.click(within(alert).getByRole("button", { name: "Dismiss" }));
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-
-    confirmSpy.mockRestore();
   });
 
   it("does not render Relaunch (clean) on worker sessions", () => {
@@ -507,7 +539,7 @@ describe("SessionDetail desktop layout", () => {
     expect(
       within(screen.getByRole("banner")).queryByRole("link", { name: "Orchestrator" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByText("orchestrator")).toBeInTheDocument();
+    expect(within(screen.getByRole("banner")).getByText("Orchestrator")).toBeInTheDocument();
   });
 
   it("shows the main orchestrator button when an orchestrator target exists", () => {
