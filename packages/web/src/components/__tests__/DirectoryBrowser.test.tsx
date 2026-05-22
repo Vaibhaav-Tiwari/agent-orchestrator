@@ -2,8 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DirectoryBrowser } from "@/components/DirectoryBrowser";
-import { useDirectoryBrowser } from "@/hooks/useDirectoryBrowser";
-import type { UseDirectoryBrowser } from "@/hooks/useDirectoryBrowser";
+import { useDirectoryBrowser, type UseDirectoryBrowser } from "@/hooks/useDirectoryBrowser";
 
 const localStorageDescriptor = Object.getOwnPropertyDescriptor(window, "localStorage");
 
