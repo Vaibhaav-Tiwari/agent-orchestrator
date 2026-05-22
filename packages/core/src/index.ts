@@ -41,6 +41,13 @@ export {
   listMetadata,
 } from "./metadata.js";
 export { createInitialCanonicalLifecycle, deriveLegacyStatus } from "./lifecycle-state.js";
+export {
+  resolveAgentSelection,
+  resolveAgentSelectionForSession,
+  resolveSessionRole,
+  type ResolvedAgentSelection,
+  type SessionRole,
+} from "./agent-selection.js";
 export { sessionFromMetadata } from "./utils/session-from-metadata.js";
 
 // AO-local code review store
@@ -366,6 +373,7 @@ export {
   isMac,
   isLinux,
   getDefaultRuntime,
+  getNodePtyPrebuildsSubdir,
   getShell,
   killProcessTree,
   findPidByPort,
@@ -425,7 +433,7 @@ export { UpdateChannelSchema, InstallMethodOverrideSchema } from "./global-confi
 
 // Channel-aware semver comparison shared by the CLI's update-check and the
 // dashboard's /api/version route.
-export { isVersionOutdated } from "./version-compare.js";
+export { isVersionOutdated, isVersionOutdatedForChannel } from "./version-compare.js";
 
 // Cache-layer primitives for the update pipeline. Both the CLI and the
 // dashboard's /api/version route read the same cache file; centralising the

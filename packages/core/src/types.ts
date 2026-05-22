@@ -157,7 +157,7 @@ export const ACTIVITY_STATE = {
 
 export type ActivitySignalState = "valid" | "stale" | "null" | "unavailable" | "probe_failure";
 
-export type ActivitySignalSource = "native" | "terminal" | "runtime" | "none";
+export type ActivitySignalSource = "native" | "terminal" | "hook" | "runtime" | "none";
 
 export interface ActivitySignal {
   /** Confidence bucket for the activity probe result. */
@@ -183,11 +183,16 @@ export interface ActivityDetection {
 export interface ActivityLogEntry {
   /** ISO 8601 timestamp */
   ts: string;
-  /** Activity state derived from terminal output or agent-native data */
+  /** Activity state derived from terminal output, agent-native data, or a platform-event hook */
   state: ActivityState;
-  /** What triggered this state classification */
-  source: "terminal" | "native";
-  /** Raw terminal snippet that caused waiting_input/blocked (for debugging) */
+  /**
+   * Provenance of this entry:
+   *   - "terminal": classified from terminal output (regex/heuristic; deprecated for hook-capable agents)
+   *   - "native":   read from the agent's own JSONL/API
+   *   - "hook":     emitted by an agent lifecycle hook (e.g. Claude Code's PermissionRequest, Stop, StopFailure)
+   */
+  source: "terminal" | "native" | "hook";
+  /** Raw terminal snippet, hook event name, or other context that caused waiting_input/blocked (for debugging) */
   trigger?: string;
 }
 
@@ -474,6 +479,13 @@ export interface Agent {
 
   /** Process name to look for (e.g. "claude", "codex", "aider") */
   readonly processName: string;
+
+  /**
+   * How the initial user prompt is delivered.
+   * Defaults to inline, meaning the agent embeds the prompt in getLaunchCommand().
+   * Use post-launch for interactive CLIs that must start first and receive input over stdin.
+   */
+  readonly promptDelivery?: "inline" | "post-launch";
 
   /** Get the shell command to launch this agent */
   getLaunchCommand(config: AgentLaunchConfig): string;

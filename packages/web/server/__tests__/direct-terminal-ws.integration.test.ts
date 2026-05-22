@@ -200,6 +200,19 @@ describeWithTmux("WebSocket upgrade routing", () => {
     ws.close();
   });
 
+  it("accepts connections on /ao-terminal-mux (alias for /mux)", async () => {
+    // The dashboard's MuxProvider uses this path on standard-port deployments
+    // so a path-routing reverse proxy can forward it here without a rewrite.
+    const ws = await new Promise<WebSocket>((resolve, reject) => {
+      const sock = new WebSocket(`ws://localhost:${port}/ao-terminal-mux`);
+      sock.on("open", () => resolve(sock));
+      sock.on("error", reject);
+      setTimeout(() => reject(new Error("WebSocket connect timeout")), 5000);
+    });
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
+  });
+
   it("requires auth_token on /mux when remote auth is enabled", async () => {
     vi.stubEnv("AO_REMOTE_AUTH_USER", "ao");
     vi.stubEnv("AO_REMOTE_AUTH_PASSWORD", "secret");

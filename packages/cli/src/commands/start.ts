@@ -10,11 +10,7 @@
  */
 
 import { type ChildProcess } from "node:child_process";
-import {
-  existsSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, basename, dirname } from "node:path";
 import { cwd } from "node:process";
 import chalk from "chalk";
@@ -91,6 +87,7 @@ import {
   type DetectedAgent,
 } from "../lib/detect-agent.js";
 import { detectDefaultBranch } from "../lib/git-utils.js";
+import { dashboardUrl } from "../lib/dashboard-url.js";
 import { promptConfirm, promptSelect, promptText } from "../lib/prompts.js";
 import { extractOwnerRepo, isValidRepoString } from "../lib/repo-utils.js";
 import {
@@ -824,12 +821,7 @@ async function startDashboard(
   directTerminalPort?: number,
   devMode?: boolean,
 ): Promise<ChildProcess> {
-  const env = await buildDashboardEnv(
-    port,
-    configPath,
-    terminalPort,
-    directTerminalPort,
-  );
+  const env = await buildDashboardEnv(port, configPath, terminalPort, directTerminalPort);
 
   // Detect monorepo vs npm install: the `server/` source directory only exists
   // in the monorepo. Published npm packages only have `dist-server/`.
@@ -895,6 +887,8 @@ async function runStartup(
     orchestrator?: boolean;
     rebuild?: boolean;
     dev?: boolean;
+    /** true = restore without prompting, false = skip restore, undefined = prompt for humans */
+    restore?: boolean;
   },
 ): Promise<StartupResult> {
   await runtimePreflight(config);
@@ -954,7 +948,7 @@ async function runStartup(
       config.directTerminalPort,
       opts?.dev,
     );
-    spinner.succeed(`Dashboard starting on http://localhost:${port}`);
+    spinner.succeed(`Dashboard starting on ${dashboardUrl(port)}`);
     console.log(chalk.dim("  (Dashboard will be ready in a few seconds)\n"));
   }
 
@@ -1028,11 +1022,14 @@ async function runStartup(
     }
   }
 
-  // Check for sessions from last `ao stop` and offer to restore them
-  if (isHumanCaller()) {
+  // Check for sessions from last `ao stop` and restore/prompt/skip based on caller intent.
+  if (opts?.restore !== false && (opts?.restore === true || isHumanCaller())) {
     try {
       const lastStop = await readLastStop();
-      if (lastStop && lastStop.sessionIds.length > 0) {
+      const totalLastStopSessions =
+        (lastStop?.sessionIds.length ?? 0) +
+        (lastStop?.otherProjects ?? []).reduce((sum, p) => sum + p.sessionIds.length, 0);
+      if (lastStop && totalLastStopSessions > 0) {
         const stoppedAgo = `stopped at ${new Date(lastStop.stoppedAt).toLocaleString()}`;
         const otherProjects = lastStop.otherProjects ?? [];
         const restoreProjectBySessionId = new Map<string, string>();
@@ -1073,7 +1070,8 @@ async function runStartup(
         }
 
         if (allRestoreSessions.length > 0) {
-          const shouldRestore = await promptConfirm("Restore these sessions?", true);
+          const shouldRestore =
+            opts?.restore === true ? true : await promptConfirm("Restore these sessions?", true);
           if (shouldRestore) {
             recordActivityEvent({
               projectId,
@@ -1206,7 +1204,7 @@ async function runStartup(
   console.log(chalk.bold.green("\n✓ Startup complete\n"));
 
   if (opts?.dashboard !== false) {
-    console.log(chalk.cyan("Dashboard:"), `http://localhost:${port}`);
+    console.log(chalk.cyan("Dashboard:"), dashboardUrl(port));
     console.log(chalk.dim("  Use the dashboard Remote button to enable mobile access at runtime."));
   }
 
@@ -1241,7 +1239,7 @@ async function runStartup(
     openAbort = new AbortController();
     const orchestratorUrl = selectedOrchestratorId
       ? projectSessionUrl(port, projectId, selectedOrchestratorId)
-      : `http://localhost:${port}`;
+      : dashboardUrl(port);
     void waitForPortAndOpen(port, orchestratorUrl, openAbort.signal);
   }
 
@@ -1438,10 +1436,10 @@ async function attachAndSpawnOrchestrator(opts: {
   }
 
   if (isHumanCaller()) {
-    console.log(chalk.dim(`  Opening dashboard: http://localhost:${daemon.port}\n`));
-    openUrl(`http://localhost:${daemon.port}`);
+    console.log(chalk.dim(`  Opening dashboard: ${dashboardUrl(daemon.port)}\n`));
+    openUrl(dashboardUrl(daemon.port));
   } else {
-    console.log(`Dashboard: http://localhost:${daemon.port}`);
+    console.log(`Dashboard: ${dashboardUrl(daemon.port)}`);
   }
 }
 
@@ -1461,6 +1459,8 @@ export function registerStart(program: Command): void {
     .option("--dev", "Use Next.js dev server with hot reload (for dashboard UI development)")
     .option("--interactive", "Prompt to configure config settings")
     .option("--reap-orphans", "Kill orphaned AO child processes before starting")
+    .option("--restore", "Restore sessions from last ao stop without prompting")
+    .option("--no-restore", "Skip restoring sessions from last ao stop")
     .action(
       async (
         projectArg?: string,
@@ -1471,6 +1471,7 @@ export function registerStart(program: Command): void {
           dev?: boolean;
           interactive?: boolean;
           reapOrphans?: boolean;
+          restore?: boolean;
         },
       ) => {
         recordActivityEvent({
@@ -1523,7 +1524,7 @@ export function registerStart(program: Command): void {
               // exit. Project-id args fall through to attach+spawn so
               // automation can `ao start <id>` against a live daemon.
               console.log(`AO is already running.`);
-              console.log(`Dashboard: http://localhost:${running.port}`);
+              console.log(`Dashboard: ${dashboardUrl(running.port)}`);
               console.log(`PID: ${running.pid}`);
               console.log(`Projects: ${running.projects.join(", ")}`);
               console.log(`To restart: ao stop && ao start`);
@@ -1533,7 +1534,7 @@ export function registerStart(program: Command): void {
 
             if (isHumanCaller() && !projectArg) {
               console.log(chalk.cyan(`\nℹ AO is already running.`));
-              console.log(`  Dashboard: ${chalk.cyan(`http://localhost:${running.port}`)}`);
+              console.log(`  Dashboard: ${chalk.cyan(dashboardUrl(running.port))}`);
               console.log(`  PID: ${running.pid} | Up since: ${running.startedAt}`);
               console.log(`  Projects: ${running.projects.join(", ")}\n`);
 
@@ -1580,7 +1581,7 @@ export function registerStart(program: Command): void {
               );
 
               if (choice === "open") {
-                openUrl(`http://localhost:${running.port}`);
+                openUrl(dashboardUrl(running.port));
                 unlockStartup();
                 process.exit(0);
               } else if (choice === "quit") {
@@ -1612,7 +1613,7 @@ export function registerStart(program: Command): void {
                     ),
                   );
                 }
-                openUrl(`http://localhost:${running.port}`);
+                openUrl(dashboardUrl(running.port));
                 unlockStartup();
                 process.exit(0);
               } else if (choice === "new") {
@@ -1698,9 +1699,9 @@ export function registerStart(program: Command): void {
               running.projects.includes(projectId)
             ) {
               console.log(chalk.cyan(`\nℹ AO is already running.`));
-              console.log(`  Dashboard: ${chalk.cyan(`http://localhost:${running.port}`)}`);
+              console.log(`  Dashboard: ${chalk.cyan(dashboardUrl(running.port))}`);
               console.log(`  Project "${projectId}" is already registered and running.\n`);
-              openUrl(`http://localhost:${running.port}`);
+              openUrl(dashboardUrl(running.port));
               unlockStartup();
               process.exit(0);
             }
@@ -1868,273 +1869,307 @@ export function registerStop(program: Command): void {
     .description("Stop orchestrator agent and dashboard")
     .option("--purge-session", "Delete mapped OpenCode session when stopping")
     .option("--all", "Stop all running AO instances")
-    .action(async (projectArg?: string, opts: { purgeSession?: boolean; all?: boolean } = {}) => {
-      recordActivityEvent({
-        source: "cli",
-        kind: "cli.stop_invoked",
-        level: "info",
-        summary: "ao stop invoked",
-        data: {
-          projectArg: projectArg ?? null,
-          all: opts.all === true,
-          purgeSession: opts.purgeSession === true,
-        },
-      });
-      try {
-        // Check running.json first
-        const running = await getRunning();
-
-        if (opts.all) {
-          // --all: kill via running.json if available, then fallback to config
-          if (running) {
-            // Sweep detached Windows pty-hosts BEFORE killing the parent.
-            // detached:true puts them outside the parent's process tree, so
-            // taskkill /T cannot reach them. The sweep speaks the named-pipe
-            // protocol so node-pty disposes ConPTY gracefully (avoids WER
-            // 0x800700e8). No-op on non-Windows.
-            await sweepWindowsPtyHostsBeforeParentKill();
-            await sweepRegisteredDaemonChildren(running.pid);
-            // killProcessTree handles process trees on Windows (taskkill /T /F)
-            // and process groups on Unix; it swallows "already dead" internally.
-            await killProcessTree(running.pid, "SIGTERM");
-            await unregister();
-            console.log(chalk.green(`\n✓ Stopped AO on port ${running.port}`));
-            console.log(chalk.dim(`  Projects: ${running.projects.join(", ")}\n`));
-          } else {
-            console.log(chalk.yellow("No running AO instance found in running.json."));
-          }
-          return;
-        }
-
-        let config = loadConfig();
-        // ao stop affects all projects (it kills the parent ao start process),
-        // so load the global config which has all registered projects.
-        // When a specific project is targeted, only fall back to global if
-        // the project isn't in the local config.
-        if (!projectArg || !config.projects[projectArg]) {
-          const globalPath = getGlobalConfigPath();
-          if (existsSync(globalPath)) {
-            config = loadConfig(globalPath);
-          }
-        }
-        const { projectId: _projectId, project } = await resolveProject(config, projectArg, "stop");
-        const port = config.port ?? DEFAULT_PORT;
-
-        console.log(chalk.bold(`\nStopping orchestrator for ${chalk.cyan(project.name)}\n`));
-
-        const sm = await getSessionManager(config);
+    .option("-y, --yes", "Confirm stopping active sessions without prompting")
+    .action(
+      async (
+        projectArg?: string,
+        opts: { purgeSession?: boolean; all?: boolean; yes?: boolean } = {},
+      ) => {
+        recordActivityEvent({
+          source: "cli",
+          kind: "cli.stop_invoked",
+          level: "info",
+          summary: "ao stop invoked",
+          data: {
+            projectArg: projectArg ?? null,
+            all: opts.all === true,
+            purgeSession: opts.purgeSession === true,
+          },
+        });
         try {
-          // When no explicit project is given, list ALL sessions — ao stop
-          // kills the parent process which affects all projects. When a
-          // specific project is targeted, scope to that project only.
-          const stopAll = !projectArg;
-          const rawSessions = await sm.list(stopAll ? undefined : _projectId);
-          // Defensive consumer-side filter. `sm.list(projectId)` already scopes
-          // to the named project, but the kill loop hard-stops processes — a
-          // contract regression here would silently kill another project's
-          // work. When a project arg is given, drop anything that isn't ours.
-          const allSessions = stopAll
-            ? rawSessions
-            : rawSessions.filter((s) => s.projectId === _projectId);
-          const activeSessions = allSessions.filter((s) => !isTerminalSession(s));
-          const killedSessionIds: string[] = [];
+          // Check running.json first
+          const running = await getRunning();
 
-          // Separate sessions by project for display and recording
-          const targetActive = activeSessions.filter((s) => s.projectId === _projectId);
-          const otherActive = activeSessions.filter((s) => s.projectId !== _projectId);
-          // Group other-project sessions by projectId (used for display + recording)
-          const otherByProject = new Map<string, string[]>();
+          if (opts.all) {
+            // --all: kill via running.json if available, then fallback to config
+            if (running) {
+              // Sweep detached Windows pty-hosts BEFORE killing the parent.
+              // detached:true puts them outside the parent's process tree, so
+              // taskkill /T cannot reach them. The sweep speaks the named-pipe
+              // protocol so node-pty disposes ConPTY gracefully (avoids WER
+              // 0x800700e8). No-op on non-Windows.
+              await sweepWindowsPtyHostsBeforeParentKill();
+              await sweepRegisteredDaemonChildren(running.pid);
+              // killProcessTree handles process trees on Windows (taskkill /T /F)
+              // and process groups on Unix; it swallows "already dead" internally.
+              await killProcessTree(running.pid, "SIGTERM");
+              await unregister();
+              console.log(chalk.green(`\n✓ Stopped AO on port ${running.port}`));
+              console.log(chalk.dim(`  Projects: ${running.projects.join(", ")}\n`));
+            } else {
+              console.log(chalk.yellow("No running AO instance found in running.json."));
+            }
+            return;
+          }
 
-          if (activeSessions.length > 0) {
-            const spinner = ora(`Stopping ${activeSessions.length} active session(s)`).start();
-            const purgeOpenCode = opts?.purgeSession === true;
-            const warnings: string[] = [];
-            for (const session of activeSessions) {
-              try {
-                const result = await sm.kill(session.id, { purgeOpenCode });
-                if (result.cleaned || result.alreadyTerminated) {
-                  killedSessionIds.push(session.id);
+          let config = loadConfig();
+          // ao stop affects all projects (it kills the parent ao start process),
+          // so load the global config which has all registered projects.
+          // When a specific project is targeted, only fall back to global if
+          // the project isn't in the local config.
+          if (!projectArg || !config.projects[projectArg]) {
+            const globalPath = getGlobalConfigPath();
+            if (existsSync(globalPath)) {
+              config = loadConfig(globalPath);
+            }
+          }
+          let _projectId: string;
+          let project: ProjectConfig;
+          if (projectArg) {
+            ({ projectId: _projectId, project } = await resolveProject(config, projectArg, "stop"));
+          } else {
+            const projectIds = Object.keys(config.projects);
+            if (projectIds.length === 0) {
+              throw new Error("No projects configured. Add a project to agent-orchestrator.yaml.");
+            }
+            const currentDir = resolve(cwd());
+            const cwdProjectId = findProjectForDirectory(config.projects, currentDir);
+            _projectId =
+              running?.projects.find((id) => config.projects[id]) ?? cwdProjectId ?? projectIds[0];
+            project = config.projects[_projectId];
+          }
+          const port = config.port ?? DEFAULT_PORT;
+
+          if (projectArg) {
+            console.log(chalk.bold(`\nStopping orchestrator for ${chalk.cyan(project.name)}\n`));
+          } else {
+            console.log(chalk.bold(`\nStopping AO across all projects\n`));
+          }
+
+          const sm = await getSessionManager(config);
+          try {
+            // When no explicit project is given, list ALL sessions — ao stop
+            // kills the parent process which affects all projects. When a
+            // specific project is targeted, scope to that project only.
+            const stopAll = !projectArg;
+            const rawSessions = await sm.list(stopAll ? undefined : _projectId);
+            // Defensive consumer-side filter. `sm.list(projectId)` already scopes
+            // to the named project, but the kill loop hard-stops processes — a
+            // contract regression here would silently kill another project's
+            // work. When a project arg is given, drop anything that isn't ours.
+            const allSessions = stopAll
+              ? rawSessions
+              : rawSessions.filter((s) => s.projectId === _projectId);
+            const activeSessions = allSessions.filter((s) => !isTerminalSession(s));
+            const killedSessionIds: string[] = [];
+
+            // Separate sessions by project for display and recording
+            const targetActive = activeSessions.filter((s) => s.projectId === _projectId);
+            const otherActive = activeSessions.filter((s) => s.projectId !== _projectId);
+            // Group other-project sessions by projectId (used for display + recording)
+            const otherByProject = new Map<string, string[]>();
+
+            if (activeSessions.length > 0) {
+              if (!projectArg && opts.yes !== true && isHumanCaller()) {
+                const confirmed = await promptConfirm(
+                  `Stop AO and ${activeSessions.length} active session(s)?`,
+                  false,
+                );
+                if (!confirmed) {
+                  console.log(chalk.yellow("Stop cancelled."));
+                  return;
                 }
+              }
+              const spinner = ora(`Stopping ${activeSessions.length} active session(s)`).start();
+              const purgeOpenCode = opts?.purgeSession === true;
+              const warnings: string[] = [];
+              for (const session of activeSessions) {
+                try {
+                  const result = await sm.kill(session.id, { purgeOpenCode });
+                  if (result.cleaned || result.alreadyTerminated) {
+                    killedSessionIds.push(session.id);
+                  }
+                } catch (err) {
+                  recordActivityEvent({
+                    projectId: session.projectId ?? _projectId,
+                    sessionId: session.id,
+                    source: "cli",
+                    kind: "cli.stop_session_failed",
+                    level: "warn",
+                    summary: `failed to kill session during ao stop`,
+                    data: { errorMessage: err instanceof Error ? err.message : String(err) },
+                  });
+                  warnings.push(
+                    `  Warning: failed to stop ${session.id}: ${err instanceof Error ? err.message : String(err)}`,
+                  );
+                }
+              }
+              if (killedSessionIds.length === 0) {
+                spinner.fail("Failed to stop any sessions");
+              } else if (killedSessionIds.length < activeSessions.length) {
+                spinner.warn(
+                  `Stopped ${killedSessionIds.length}/${activeSessions.length} session(s)`,
+                );
+              } else {
+                spinner.succeed(`Stopped ${killedSessionIds.length} session(s)`);
+              }
+              for (const w of warnings) {
+                console.log(chalk.yellow(w));
+              }
+              // Show stopped sessions grouped by project
+              const killedTarget = targetActive
+                .filter((s) => killedSessionIds.includes(s.id))
+                .map((s) => s.id);
+              if (killedTarget.length > 0) {
+                console.log(chalk.green(`  ${project.name}: ${killedTarget.join(", ")}`));
+              }
+              for (const s of otherActive) {
+                if (!killedSessionIds.includes(s.id)) continue;
+                const list = otherByProject.get(s.projectId ?? "unknown") ?? [];
+                list.push(s.id);
+                otherByProject.set(s.projectId ?? "unknown", list);
+              }
+              for (const [pid, ids] of otherByProject) {
+                console.log(chalk.green(`  ${pid}: ${ids.join(", ")}`));
+              }
+            } else {
+              console.log(chalk.yellow(`No active sessions found`));
+            }
+
+            // Record stopped sessions for restore on next `ao start`
+            if (killedSessionIds.length > 0) {
+              const otherProjects: Array<{ projectId: string; sessionIds: string[] }> = [];
+              for (const [pid, ids] of otherByProject) {
+                otherProjects.push({ projectId: pid, sessionIds: ids });
+              }
+
+              const targetSessionIds = killedSessionIds.filter((id) =>
+                targetActive.some((s) => s.id === id),
+              );
+              try {
+                await writeLastStop({
+                  stoppedAt: new Date().toISOString(),
+                  projectId: _projectId,
+                  sessionIds: targetSessionIds,
+                  otherProjects: otherProjects.length > 0 ? otherProjects : undefined,
+                });
+                recordActivityEvent({
+                  projectId: _projectId,
+                  source: "cli",
+                  kind: "cli.last_stop_written",
+                  level: "info",
+                  summary: `last-stop state written with ${killedSessionIds.length} session(s)`,
+                  data: {
+                    targetSessionCount: targetSessionIds.length,
+                    otherProjectCount: otherProjects.length,
+                    totalKilled: killedSessionIds.length,
+                  },
+                });
               } catch (err) {
                 recordActivityEvent({
-                  projectId: session.projectId ?? _projectId,
-                  sessionId: session.id,
+                  projectId: _projectId,
                   source: "cli",
-                  kind: "cli.stop_session_failed",
-                  level: "warn",
-                  summary: `failed to kill session during ao stop`,
-                  data: { errorMessage: err instanceof Error ? err.message : String(err) },
+                  kind: "cli.last_stop_write_failed",
+                  level: "error",
+                  summary: `failed to write last-stop state during ao stop`,
+                  data: {
+                    targetSessionCount: targetSessionIds.length,
+                    otherProjectCount: otherProjects.length,
+                    totalKilled: killedSessionIds.length,
+                    errorMessage: err instanceof Error ? err.message : String(err),
+                  },
                 });
-                warnings.push(
-                  `  Warning: failed to stop ${session.id}: ${err instanceof Error ? err.message : String(err)}`,
+                console.log(
+                  chalk.yellow(
+                    `  Could not write last-stop state: ${err instanceof Error ? err.message : String(err)}`,
+                  ),
                 );
               }
             }
-            if (killedSessionIds.length === 0) {
-              spinner.fail("Failed to stop any sessions");
-            } else if (killedSessionIds.length < activeSessions.length) {
-              spinner.warn(
-                `Stopped ${killedSessionIds.length}/${activeSessions.length} session(s)`,
-              );
-            } else {
-              spinner.succeed(`Stopped ${killedSessionIds.length} session(s)`);
-            }
-            for (const w of warnings) {
-              console.log(chalk.yellow(w));
-            }
-            // Show stopped sessions grouped by project
-            const killedTarget = targetActive
-              .filter((s) => killedSessionIds.includes(s.id))
-              .map((s) => s.id);
-            if (killedTarget.length > 0) {
-              console.log(chalk.green(`  ${project.name}: ${killedTarget.join(", ")}`));
-            }
-            for (const s of otherActive) {
-              if (!killedSessionIds.includes(s.id)) continue;
-              const list = otherByProject.get(s.projectId ?? "unknown") ?? [];
-              list.push(s.id);
-              otherByProject.set(s.projectId ?? "unknown", list);
-            }
-            for (const [pid, ids] of otherByProject) {
-              console.log(chalk.green(`  ${pid}: ${ids.join(", ")}`));
-            }
-          } else {
-            console.log(chalk.yellow(`No active sessions found`));
+          } catch (err) {
+            console.log(
+              chalk.yellow(
+                `  Could not list sessions: ${err instanceof Error ? err.message : String(err)}`,
+              ),
+            );
           }
 
-          // Record stopped sessions for restore on next `ao start`
-          if (killedSessionIds.length > 0) {
-            const otherProjects: Array<{ projectId: string; sessionIds: string[] }> = [];
-            for (const [pid, ids] of otherByProject) {
-              otherProjects.push({ projectId: pid, sessionIds: ids });
+          // Only kill the parent `ao start` process and dashboard when stopping
+          // everything (no project arg). When targeting a specific project, the
+          // parent process and dashboard serve all projects and must stay alive.
+          if (!projectArg) {
+            // Lifecycle polling runs in-process inside the `ao start` process
+            // (registered via `running.json`). Sending SIGTERM to that PID below
+            // triggers the shared shutdown handler in `lifecycle-service`, which
+            // stops every per-project loop. No explicit stop call needed here —
+            // this CLI invocation is a separate process with an empty active map.
+            if (running) {
+              // Sweep detached Windows pty-hosts BEFORE killing the parent.
+              // detached:true puts them outside the parent's process tree, so
+              // taskkill /T cannot reach them. The sweep speaks the named-pipe
+              // protocol so node-pty disposes ConPTY gracefully (avoids WER
+              // 0x800700e8). No-op on non-Windows.
+              await sweepWindowsPtyHostsBeforeParentKill();
+              await sweepRegisteredDaemonChildren(running.pid);
+              try {
+                await killProcessTree(running.pid, "SIGTERM");
+                recordActivityEvent({
+                  projectId: _projectId,
+                  source: "cli",
+                  kind: "cli.daemon_killed",
+                  level: "info",
+                  summary: `SIGTERM sent to parent ao start`,
+                  data: { pid: running.pid, port: running.port },
+                });
+              } catch (err) {
+                recordActivityEvent({
+                  projectId: _projectId,
+                  source: "cli",
+                  kind: "cli.daemon_killed",
+                  level: "warn",
+                  summary: `parent ao start was already dead`,
+                  data: {
+                    pid: running.pid,
+                    errorMessage: err instanceof Error ? err.message : String(err),
+                  },
+                });
+              }
+              await unregister();
+            } else {
+              await sweepRegisteredDaemonChildren();
             }
+            await stopDashboard(running?.port ?? port);
+          }
+          // Targeted stop deliberately does NOT edit `running.json` from this
+          // child CLI process. The long-lived parent supervises lifecycle
+          // workers and will remove the project from `running.projects` after
+          // it observes that the last session became terminal.
 
-            const targetSessionIds = killedSessionIds.filter((id) =>
-              targetActive.some((s) => s.id === id),
-            );
-            try {
-              await writeLastStop({
-                stoppedAt: new Date().toISOString(),
-                projectId: _projectId,
-                sessionIds: targetSessionIds,
-                otherProjects: otherProjects.length > 0 ? otherProjects : undefined,
-              });
-              recordActivityEvent({
-                projectId: _projectId,
-                source: "cli",
-                kind: "cli.last_stop_written",
-                level: "info",
-                summary: `last-stop state written with ${killedSessionIds.length} session(s)`,
-                data: {
-                  targetSessionCount: targetSessionIds.length,
-                  otherProjectCount: otherProjects.length,
-                  totalKilled: killedSessionIds.length,
-                },
-              });
-            } catch (err) {
-              recordActivityEvent({
-                projectId: _projectId,
-                source: "cli",
-                kind: "cli.last_stop_write_failed",
-                level: "error",
-                summary: `failed to write last-stop state during ao stop`,
-                data: {
-                  targetSessionCount: targetSessionIds.length,
-                  otherProjectCount: otherProjects.length,
-                  totalKilled: killedSessionIds.length,
-                  errorMessage: err instanceof Error ? err.message : String(err),
-                },
-              });
-              console.log(
-                chalk.yellow(
-                  `  Could not write last-stop state: ${err instanceof Error ? err.message : String(err)}`,
-                ),
-              );
-            }
+          if (projectArg) {
+            console.log(chalk.bold.green(`\n✓ Stopped sessions for ${project.name}\n`));
+          } else {
+            console.log(chalk.bold.green("\n✓ Orchestrator stopped\n"));
+            console.log(chalk.dim(`  Uptime: since ${running?.startedAt ?? "unknown"}`));
+            console.log(chalk.dim(`  Projects: ${Object.keys(config.projects).join(", ")}\n`));
           }
         } catch (err) {
-          console.log(
-            chalk.yellow(
-              `  Could not list sessions: ${err instanceof Error ? err.message : String(err)}`,
-            ),
-          );
-        }
-
-        // Only kill the parent `ao start` process and dashboard when stopping
-        // everything (no project arg). When targeting a specific project, the
-        // parent process and dashboard serve all projects and must stay alive.
-        if (!projectArg) {
-          // Lifecycle polling runs in-process inside the `ao start` process
-          // (registered via `running.json`). Sending SIGTERM to that PID below
-          // triggers the shared shutdown handler in `lifecycle-service`, which
-          // stops every per-project loop. No explicit stop call needed here —
-          // this CLI invocation is a separate process with an empty active map.
-          if (running) {
-            // Sweep detached Windows pty-hosts BEFORE killing the parent.
-            // detached:true puts them outside the parent's process tree, so
-            // taskkill /T cannot reach them. The sweep speaks the named-pipe
-            // protocol so node-pty disposes ConPTY gracefully (avoids WER
-            // 0x800700e8). No-op on non-Windows.
-            await sweepWindowsPtyHostsBeforeParentKill();
-            await sweepRegisteredDaemonChildren(running.pid);
-            try {
-              await killProcessTree(running.pid, "SIGTERM");
-              recordActivityEvent({
-                projectId: _projectId,
-                source: "cli",
-                kind: "cli.daemon_killed",
-                level: "info",
-                summary: `SIGTERM sent to parent ao start`,
-                data: { pid: running.pid, port: running.port },
-              });
-            } catch (err) {
-              recordActivityEvent({
-                projectId: _projectId,
-                source: "cli",
-                kind: "cli.daemon_killed",
-                level: "warn",
-                summary: `parent ao start was already dead`,
-                data: {
-                  pid: running.pid,
-                  errorMessage: err instanceof Error ? err.message : String(err),
-                },
-              });
-            }
-            await unregister();
+          recordActivityEvent({
+            source: "cli",
+            kind: "cli.stop_failed",
+            level: "error",
+            summary: `ao stop action failed`,
+            data: {
+              projectArg: projectArg ?? null,
+              errorMessage: err instanceof Error ? err.message : String(err),
+            },
+          });
+          if (err instanceof Error) {
+            console.error(chalk.red("\nError:"), err.message);
           } else {
-            await sweepRegisteredDaemonChildren();
+            console.error(chalk.red("\nError:"), String(err));
           }
-          await stopDashboard(running?.port ?? port);
+          process.exit(1);
         }
-        // Targeted stop deliberately does NOT edit `running.json` from this
-        // child CLI process. The long-lived parent supervises lifecycle
-        // workers and will remove the project from `running.projects` after
-        // it observes that the last session became terminal.
-
-        if (projectArg) {
-          console.log(chalk.bold.green(`\n✓ Stopped sessions for ${project.name}\n`));
-        } else {
-          console.log(chalk.bold.green("\n✓ Orchestrator stopped\n"));
-          console.log(chalk.dim(`  Uptime: since ${running?.startedAt ?? "unknown"}`));
-          console.log(chalk.dim(`  Projects: ${Object.keys(config.projects).join(", ")}\n`));
-        }
-      } catch (err) {
-        recordActivityEvent({
-          source: "cli",
-          kind: "cli.stop_failed",
-          level: "error",
-          summary: `ao stop action failed`,
-          data: {
-            projectArg: projectArg ?? null,
-            errorMessage: err instanceof Error ? err.message : String(err),
-          },
-        });
-        if (err instanceof Error) {
-          console.error(chalk.red("\nError:"), err.message);
-        } else {
-          console.error(chalk.red("\nError:"), String(err));
-        }
-        process.exit(1);
-      }
-    });
+      },
+    );
 }

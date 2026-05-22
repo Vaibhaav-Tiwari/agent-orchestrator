@@ -105,6 +105,23 @@ function spawnProcess(
 const port = process.env["PORT"] || "3000";
 const hostname = process.env["HOST"] || "0.0.0.0";
 process.env["AO_TRUST_REMOTE_ADDRESS_HEADER"] = "1";
+const pathBasedMux = process.env["AO_PATH_BASED_MUX"] === "1";
+
+// When AO_PATH_BASED_MUX=1, single-port-server.js owns PORT and Next.js is
+// shifted to PORT + 1000 (overridable via NEXT_INTERNAL_PORT). The proxy
+// forwards HTTP to Next.js and tunnels `/ao-terminal-mux` WS upgrades to
+// direct-terminal-ws. Default off — Next.js stays on PORT directly.
+const NEXT_INTERNAL_OFFSET = 1000;
+const nextPort = pathBasedMux
+  ? (process.env["NEXT_INTERNAL_PORT"] ?? String(parseInt(port, 10) + NEXT_INTERNAL_OFFSET))
+  : port;
+
+if (pathBasedMux) {
+  // Surface the internal port to the child so it doesn't have to re-derive
+  // the offset; pin it explicitly.
+  process.env["NEXT_INTERNAL_PORT"] = nextPort;
+  spawnProcess("single-port", process.execPath, [resolve(__dirname, "single-port-server.js")]);
+}
 
 // Start direct terminal WebSocket server (auto-restart on crash)
 spawnProcess("direct-terminal", "node", [resolve(__dirname, "direct-terminal-ws.js")], {
@@ -112,7 +129,7 @@ spawnProcess("direct-terminal", "node", [resolve(__dirname, "direct-terminal-ws.
 });
 
 async function startNextServer(): Promise<void> {
-  const app = next({ dev: false, dir: pkgRoot, hostname, port: Number.parseInt(port, 10) });
+  const app = next({ dev: false, dir: pkgRoot, hostname, port: Number.parseInt(nextPort, 10) });
   const handle = app.getRequestHandler();
   await app.prepare();
 
@@ -127,8 +144,8 @@ async function startNextServer(): Promise<void> {
     }
   });
 
-  nextServer.listen(Number.parseInt(port, 10), hostname, () => {
-    log("next", `ready on http://${hostname}:${port}`);
+  nextServer.listen(Number.parseInt(nextPort, 10), hostname, () => {
+    log("next", `ready on http://${hostname}:${nextPort}`);
   });
 }
 
