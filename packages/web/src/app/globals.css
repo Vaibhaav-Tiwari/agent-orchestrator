@@ -7607,6 +7607,7 @@ html.light .xterm .xterm-viewport:hover::-webkit-scrollbar-thumb:active {
   align-items: center;
   gap: 4px;
   flex-wrap: nowrap;
+  min-width: 0;
   overflow-x: auto;
 }
 
