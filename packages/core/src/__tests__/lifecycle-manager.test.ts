@@ -1359,8 +1359,10 @@ describe("check (single session)", () => {
       // can race past the lifecycle list() call before adoption resolves.
       const deadline = Date.now() + 2000;
       while (Date.now() < deadline) {
-        if (vi.mocked(mockSessionManager.list).mock.calls.length >= 1) {
-          await new Promise((resolve) => setTimeout(resolve, 25));
+        const adoptedCount = [sessionA.branch, sessionB.branch].filter(
+          (branch) => branch === "shared-branch",
+        ).length;
+        if (vi.mocked(mockSessionManager.list).mock.calls.length >= 1 && adoptedCount > 0) {
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 10));
