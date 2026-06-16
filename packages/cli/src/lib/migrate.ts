@@ -68,14 +68,17 @@ export const DEFAULT_DAEMON_URL = "http://127.0.0.1:3001";
 
 /**
  * Resolve the rewrite daemon base URL. Precedence: explicit flag → AO_DAEMON_URL
- * → AO_PORT (loopback) → the rewrite's hardcoded default.
+ * → the rewrite's hardcoded default.
+ *
+ * We deliberately do NOT fall back to `AO_PORT`: that variable is overloaded
+ * (the legacy dashboard and the rewrite daemon both use it for "the port"), so
+ * in a legacy environment it usually points at the legacy Next.js dashboard.
+ * Targeting the rewrite daemon must be explicit and unambiguous.
  */
 export function resolveDaemonUrl(explicit?: string): string {
   if (explicit && explicit.trim().length > 0) return stripTrailingSlash(explicit.trim());
   const url = process.env.AO_DAEMON_URL;
   if (url && url.trim().length > 0) return stripTrailingSlash(url.trim());
-  const port = process.env.AO_PORT;
-  if (port && /^\d+$/.test(port.trim())) return `http://127.0.0.1:${port.trim()}`;
   return DEFAULT_DAEMON_URL;
 }
 
@@ -389,15 +392,14 @@ export async function runMigrate(opts: MigrateOptions): Promise<MigrateSummary> 
     });
   }
 
-  const ids = Object.keys(config.projects);
+  const entries = Object.entries(config.projects);
 
   // Fail fast if the daemon is down (skip the probe on dry runs — they never hit it).
-  if (!opts.dryRun && ids.length > 0) {
+  if (!opts.dryRun && entries.length > 0) {
     await apiRequest(fetchImpl, opts.daemonUrl, "GET", "/api/v1/projects");
   }
 
-  for (const id of ids) {
-    const pc = config.projects[id]!;
+  for (const [id, pc] of entries) {
     const plan = buildProjectPlan(id, pc);
 
     if (!isValidRewriteProjectId(id)) {

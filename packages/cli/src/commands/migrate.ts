@@ -21,7 +21,7 @@ export function registerMigrate(program: Command): void {
     .option("--dry-run", "Parse and map the legacy registry, print the plan, write nothing")
     .option(
       "--daemon-url <url>",
-      "New AO daemon base URL (default http://127.0.0.1:3001; env AO_DAEMON_URL / AO_PORT)",
+      "New AO daemon base URL (default http://127.0.0.1:3001; env AO_DAEMON_URL)",
     )
     .action(async (opts: { dryRun?: boolean; daemonUrl?: string }) => {
       const dryRun = opts.dryRun === true;
@@ -51,7 +51,7 @@ export function registerMigrate(program: Command): void {
           console.error(
             chalk.dim(
               "Start the new AO (the rewrite) first so its daemon is listening, then run `ao migrate`.\n" +
-                "Override the address with --daemon-url or the AO_DAEMON_URL / AO_PORT env vars.",
+                "Override the address with --daemon-url or the AO_DAEMON_URL env var.",
             ),
           );
           process.exit(1);

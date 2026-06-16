@@ -21,7 +21,9 @@ function project(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
     name: "My Project",
     path: "/repos/my-project",
     defaultBranch: "main",
-    sessionPrefix: "mp",
+    // Empty by default so per-field assertions stay focused; a dedicated test
+    // covers sessionPrefix carry-over.
+    sessionPrefix: "",
     ...overrides,
   } as ProjectConfig;
 }
@@ -79,9 +81,9 @@ describe("resolveDaemonUrl", () => {
     process.env.AO_DAEMON_URL = "http://host:1234";
     expect(resolveDaemonUrl()).toBe("http://host:1234");
   });
-  it("builds a loopback url from AO_PORT", () => {
-    process.env.AO_PORT = "4567";
-    expect(resolveDaemonUrl()).toBe("http://127.0.0.1:4567");
+  it("ignores AO_PORT (overloaded with the legacy dashboard) and uses the default", () => {
+    process.env.AO_PORT = "3000";
+    expect(resolveDaemonUrl()).toBe(DEFAULT_DAEMON_URL);
   });
   it("uses the rewrite default when nothing is set", () => {
     expect(resolveDaemonUrl()).toBe(DEFAULT_DAEMON_URL);
@@ -150,6 +152,12 @@ describe("buildRewriteConfig", () => {
     expect(buildRewriteConfig(project({ defaultBranch: "main" }), notes)).toBeNull();
     expect(buildRewriteConfig(project({ defaultBranch: "develop" }), [])).toEqual({
       defaultBranch: "develop",
+    });
+  });
+
+  it("carries a non-empty sessionPrefix", () => {
+    expect(buildRewriteConfig(project({ sessionPrefix: "app" }), [])).toEqual({
+      sessionPrefix: "app",
     });
   });
 
