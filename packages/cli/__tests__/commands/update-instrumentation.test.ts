@@ -37,6 +37,10 @@ vi.mock("../../src/lib/update-check.js", () => ({
   getUpdateCommand: (...args: unknown[]) => mockGetUpdateCommand(...args),
   readCachedUpdateInfo: vi.fn(() => undefined),
   resolveUpdateChannel: vi.fn(() => "stable"),
+  // No cutover target → these tests exercise the normal-update instrumentation.
+  resolveCutoverTarget: vi.fn(async () => null),
+  isLegacyVersion: vi.fn(() => false),
+  getCutoverInstallCommand: vi.fn(() => null),
 }));
 
 const { mockPromptConfirm } = vi.hoisted(() => ({
