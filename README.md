@@ -21,21 +21,21 @@ An Agentic IDE that supervises parallel AI coding agents in isolated workspaces,
 <table border="1" style="border-collapse: collapse; width: 100%;">
 <tr>
 <td style="padding: 10px; text-align: center; border: 1px solid #ddd;">
-<a href="https://x.com/agent_wrapper/status/2026329204405723180"><img src="BLOG IMAGES/first.png" alt="First" width="400"></a><br><br>
+<a href="https://x.com/agent_wrapper/status/2026329204405723180"><img src="screenshots/first.png" alt="First" width="400"></a><br><br>
 <a href="https://x.com/agent_wrapper/status/2026329204405723180">Visit</a>
 </td>
 <td style="padding: 10px; text-align: center; border: 1px solid #ddd;">
-<a href="https://x.com/agent_wrapper/status/2025986105485733945"><img src="BLOG IMAGES/second.png" alt="Second" width="400"></a><br><br>
+<a href="https://x.com/agent_wrapper/status/2025986105485733945"><img src="screenshots/second.png" alt="Second" width="400"></a><br><br>
 <a href="https://x.com/agent_wrapper/status/2025986105485733945">Visit</a>
 </td>
 </tr>
 <tr>
 <td style="padding: 10px; text-align: center; border: 1px solid #ddd;">
-<a href="https://x.com/agent_wrapper/status/2064157228400341312"><img src="BLOG IMAGES/third.png" alt="Third" width="400"></a><br><br>
+<a href="https://x.com/agent_wrapper/status/2064157228400341312"><img src="screenshots/third.png" alt="Third" width="400"></a><br><br>
 <a href="https://x.com/agent_wrapper/status/2064157228400341312">Visit</a>
 </td>
 <td style="padding: 10px; text-align: center; border: 1px solid #ddd;">
-<a href="https://x.com/agent_wrapper/status/2024885035774738700?s=20"><img src="BLOG IMAGES/image.png" alt="Fourth" width="400"></a><br><br>
+<a href="https://x.com/agent_wrapper/status/2024885035774738700?s=20"><img src="screenshots/image.png" alt="Fourth" width="400"></a><br><br>
 <a href="https://x.com/agent_wrapper/status/2024885035774738700?s=20">Visit</a>
 </td>
 </tr>
