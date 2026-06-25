@@ -1,1 +1,1 @@
-module.exports = require('@testing-library/jest-dom');
+module.exports = require("@testing-library/jest-dom");

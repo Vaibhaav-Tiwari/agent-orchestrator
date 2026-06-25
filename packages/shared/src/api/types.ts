@@ -3,11 +3,11 @@
 // This file is a placeholder for generated types
 
 export interface ApiResponse<T> {
-  data: T;
+	data: T;
 }
 
 export interface ApiErrorResponse {
-  error: string;
-  message: string;
-  details?: Record<string, unknown>;
+	error: string;
+	message: string;
+	details?: Record<string, unknown>;
 }
