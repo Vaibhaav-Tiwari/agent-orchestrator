@@ -236,6 +236,7 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	return projectFromRow(row), nil
 }
 
+// InitializeRepository prepares a selected folder for project registration by ensuring it has an initial Git commit.
 func (m *Service) InitializeRepository(ctx context.Context, in InitializeRepositoryInput) (InitializeRepositoryResult, error) {
 	path, err := normalizePath(in.Path)
 	if err != nil {
