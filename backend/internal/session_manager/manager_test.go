@@ -420,7 +420,7 @@ func TestSpawn_ExplicitHarnessWinsWithoutProjectRoleHarness(t *testing.T) {
 
 func TestSpawn_AssignsIDAndGoesIdle(t *testing.T) {
 	m, st, rt, _ := newManager()
-	s, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "do it"})
+	s, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "do it"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -740,7 +740,7 @@ func TestSpawnWorker_AppendsActiveOrchestratorContact(t *testing.T) {
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-	s, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "do it"})
+	s, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "do it"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -763,6 +763,63 @@ func TestSpawnWorker_AppendsActiveOrchestratorContact(t *testing.T) {
 	}
 	if strings.Contains(agent.lastLaunch.Prompt, "## Orchestrator coordination") {
 		t.Fatalf("orchestrator coordination must not be in the user prompt:\n%s", agent.lastLaunch.Prompt)
+	}
+}
+
+func TestSpawnWorker_WritesSystemPromptFile(t *testing.T) {
+	st := newFakeStore()
+	st.num = 1
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	agent := &recordingAgent{}
+	dataDir := t.TempDir()
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    singleAgent{agent: agent},
+		Workspace: &fakeWorkspace{},
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st},
+		DataDir:   dataDir,
+		LookPath:  lookPath,
+	})
+
+	s, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "do it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantPath := filepath.Join(dataDir, "prompts", string(s.ID), "system.md")
+	if agent.lastLaunch.SystemPromptFile != wantPath {
+		t.Fatalf("system prompt file = %q, want %q", agent.lastLaunch.SystemPromptFile, wantPath)
+	}
+	data, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("read system prompt file: %v", err)
+	}
+	wantBody := strings.TrimRight(agent.lastLaunch.SystemPrompt, "\n") + "\n"
+	if string(data) != wantBody {
+		t.Fatalf("system prompt file body\nwant:\n%s\n got:\n%s", wantBody, string(data))
+	}
+}
+
+func TestSpawnWorker_IssueWithoutPromptGetsFallbackTaskPrompt(t *testing.T) {
+	st := newFakeStore()
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	s, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, IssueID: "2272"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "Work on issue 2272. Use the issue context in your standing instructions."
+	if agent.lastLaunch.Prompt != want {
+		t.Fatalf("launch prompt = %q, want %q", agent.lastLaunch.Prompt, want)
+	}
+	if got := st.sessions[s.ID].Metadata.Prompt; got != want {
+		t.Fatalf("metadata prompt = %q, want %q", got, want)
 	}
 }
 
@@ -874,14 +931,19 @@ func TestRestore_OrchestratorRederivesSystemPrompt(t *testing.T) {
 		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"},
 	}
 	agent := &recordingAgent{}
+	dataDir := t.TempDir()
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
-	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: dataDir, LookPath: lookPath})
 
 	if _, err := m.Restore(ctx, "mer-1"); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(agent.lastRestore.SystemPrompt, "You are the human-facing coordinator for project mer") {
 		t.Fatalf("restore system prompt missing coordinator role:\n%s", agent.lastRestore.SystemPrompt)
+	}
+	wantPath := filepath.Join(dataDir, "prompts", "mer-1", "system.md")
+	if agent.lastRestore.SystemPromptFile != wantPath {
+		t.Fatalf("restore system prompt file = %q, want %q", agent.lastRestore.SystemPromptFile, wantPath)
 	}
 }
 
@@ -895,14 +957,19 @@ func TestRestore_FallbackLaunchCarriesSystemPrompt(t *testing.T) {
 		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", Prompt: "kick off"},
 	}
 	agent := &recordingAgent{}
+	dataDir := t.TempDir()
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
-	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: dataDir, LookPath: lookPath})
 
 	if _, err := m.Restore(ctx, "mer-1"); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(agent.lastLaunch.SystemPrompt, "You are the human-facing coordinator for project mer") {
 		t.Fatalf("fallback launch system prompt missing coordinator role:\n%s", agent.lastLaunch.SystemPrompt)
+	}
+	wantPath := filepath.Join(dataDir, "prompts", "mer-1", "system.md")
+	if agent.lastLaunch.SystemPromptFile != wantPath {
+		t.Fatalf("fallback launch system prompt file = %q, want %q", agent.lastLaunch.SystemPromptFile, wantPath)
 	}
 	if agent.lastLaunch.Prompt != "kick off" {
 		t.Fatalf("fallback launch prompt = %q, want persisted task prompt", agent.lastLaunch.Prompt)
