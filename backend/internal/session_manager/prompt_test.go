@@ -1,4 +1,4 @@
-package sessionprompt
+package sessionmanager
 
 import (
 	"os"
@@ -8,8 +8,8 @@ import (
 )
 
 func TestBuildTaskPrompt_IssueContextStaysInTaskPrompt(t *testing.T) {
-	got := BuildTaskPrompt(TaskConfig{
-		Role:         RoleWorker,
+	got := buildTaskPrompt(taskPromptConfig{
+		Role:         sessionPromptRoleWorker,
 		IssueID:      "2272",
 		IssueContext: "Title: Enrich prompts\nBody: Include issue context.",
 	})
@@ -26,9 +26,9 @@ func TestBuildTaskPrompt_IssueContextStaysInTaskPrompt(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_WorkerIncludesRulesAndOrchestrator(t *testing.T) {
-	got := BuildSystemPrompt(SystemConfig{
-		Role: RoleWorker,
-		Project: ProjectContext{
+	got := buildSystemPromptText(systemPromptConfig{
+		Role: sessionPromptRoleWorker,
+		Project: promptProject{
 			ID:            "mer",
 			Name:          "Mercury",
 			Repo:          "https://github.com/acme/mercury",
@@ -59,7 +59,7 @@ func TestBuildProjectRules_ReadsInlineAndFileRules(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "rules.md"), []byte("File rule.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := BuildProjectRules(RulesConfig{
+	got, err := buildProjectRules(projectRulesConfig{
 		ProjectPath:    dir,
 		AgentRules:     "Inline rule.",
 		AgentRulesFile: "rules.md",
@@ -75,7 +75,7 @@ func TestBuildProjectRules_ReadsInlineAndFileRules(t *testing.T) {
 }
 
 func TestProjectRelativeFileRejectsTraversal(t *testing.T) {
-	if _, err := ProjectRelativeFile(t.TempDir(), "../rules.md"); err == nil {
+	if _, err := projectRelativeFile(t.TempDir(), "../rules.md"); err == nil {
 		t.Fatal("expected traversal path to be rejected")
 	}
 }

@@ -1,4 +1,4 @@
-package sessionprompt
+package sessionmanager
 
 import (
 	"fmt"
@@ -7,18 +7,14 @@ import (
 	"strings"
 )
 
-// Role names the AO session role whose prompt is being built.
-type Role string
+type sessionPromptRole string
 
 const (
-	// RoleOrchestrator identifies the human-facing coordinator session role.
-	RoleOrchestrator Role = "orchestrator"
-	// RoleWorker identifies an implementation worker session role.
-	RoleWorker Role = "worker"
+	sessionPromptRoleOrchestrator sessionPromptRole = "orchestrator"
+	sessionPromptRoleWorker       sessionPromptRole = "worker"
 )
 
-// ProjectContext is the project information safe to include in session prompts.
-type ProjectContext struct {
+type promptProject struct {
 	ID            string
 	Name          string
 	Repo          string
@@ -26,36 +22,31 @@ type ProjectContext struct {
 	Path          string
 }
 
-// TaskConfig carries the per-session work request. It intentionally excludes
-// project rules and role instructions; those belong in the system prompt.
-type TaskConfig struct {
-	Role         Role
+type taskPromptConfig struct {
+	Role         sessionPromptRole
 	Prompt       string
 	IssueID      string
 	IssueContext string
 }
 
-// SystemConfig carries standing instructions for the session role.
-type SystemConfig struct {
-	Role                  Role
-	Project               ProjectContext
+type systemPromptConfig struct {
+	Role                  sessionPromptRole
+	Project               promptProject
 	OrchestratorSessionID string
 	ProjectRules          string
 	OrchestratorRules     string
 }
 
-// RulesConfig points at project-configured worker rules.
-type RulesConfig struct {
+type projectRulesConfig struct {
 	ProjectPath    string
 	AgentRules     string
 	AgentRulesFile string
 }
 
-// BuildTaskPrompt builds the user/task prompt sent at spawn time.
-func BuildTaskPrompt(cfg TaskConfig) string {
+func buildTaskPrompt(cfg taskPromptConfig) string {
 	issueContext := strings.TrimSpace(cfg.IssueContext)
 	if cfg.Prompt != "" {
-		if cfg.Role == RoleWorker && issueContext != "" {
+		if cfg.Role == sessionPromptRoleWorker && issueContext != "" {
 			return strings.TrimRight(cfg.Prompt, "\n") + "\n\n" + issueContextSection(issueContext)
 		}
 		return cfg.Prompt
@@ -63,7 +54,7 @@ func BuildTaskPrompt(cfg TaskConfig) string {
 	if cfg.IssueID == "" {
 		return ""
 	}
-	if cfg.Role == RoleWorker && issueContext != "" {
+	if cfg.Role == sessionPromptRoleWorker && issueContext != "" {
 		return fmt.Sprintf(`Work on issue %s.
 
 Use the issue context below as task context. First inspect the relevant code and tests, then implement the smallest appropriate fix. Run focused verification. When complete, push the branch and open or update a PR if this project uses PRs.
@@ -73,16 +64,15 @@ Use the issue context below as task context. First inspect the relevant code and
 	return fmt.Sprintf("Work on issue %s.\n\nIssue details were not pre-fetched. Start by reading the issue from the tracker, then inspect the relevant code and tests. Implement the smallest appropriate fix, run focused verification, and open or update a PR if this project uses PRs.", cfg.IssueID)
 }
 
-// BuildSystemPrompt builds the standing system prompt for a session role.
-func BuildSystemPrompt(cfg SystemConfig) string {
+func buildSystemPromptText(cfg systemPromptConfig) string {
 	sections := make([]string, 0, 5)
 	switch cfg.Role {
-	case RoleOrchestrator:
+	case sessionPromptRoleOrchestrator:
 		sections = append(sections, orchestratorSystemPrompt(cfg.Project))
 		if rules := strings.TrimSpace(cfg.OrchestratorRules); rules != "" {
 			sections = append(sections, "## Project-Specific Orchestrator Rules\n"+rules)
 		}
-	case RoleWorker:
+	case sessionPromptRoleWorker:
 		sections = append(sections, workerSystemPrompt(cfg.Project))
 		if orchestratorID := strings.TrimSpace(cfg.OrchestratorSessionID); orchestratorID != "" {
 			sections = append(sections, workerOrchestratorPrompt(orchestratorID))
@@ -97,16 +87,16 @@ func BuildSystemPrompt(cfg SystemConfig) string {
 	return strings.Join(sections, "\n\n") + systemPromptGuard
 }
 
-// BuildProjectRules loads worker rules from inline config and a repo-relative
+// buildProjectRules loads worker rules from inline config and a repo-relative
 // rules file. Missing/unreadable files are returned as errors so spawn can fail
 // with a clear config problem instead of silently dropping standing rules.
-func BuildProjectRules(cfg RulesConfig) (string, error) {
+func buildProjectRules(cfg projectRulesConfig) (string, error) {
 	parts := make([]string, 0, 2)
 	if rules := strings.TrimSpace(cfg.AgentRules); rules != "" {
 		parts = append(parts, rules)
 	}
 	if rel := strings.TrimSpace(cfg.AgentRulesFile); rel != "" {
-		path, err := ProjectRelativeFile(cfg.ProjectPath, rel)
+		path, err := projectRelativeFile(cfg.ProjectPath, rel)
 		if err != nil {
 			return "", fmt.Errorf("agentRulesFile: %w", err)
 		}
@@ -121,9 +111,7 @@ func BuildProjectRules(cfg RulesConfig) (string, error) {
 	return strings.Join(parts, "\n\n"), nil
 }
 
-// ProjectRelativeFile resolves a repo-relative prompt/rules file and refuses
-// paths that escape the project root.
-func ProjectRelativeFile(projectPath, rel string) (string, error) {
+func projectRelativeFile(projectPath, rel string) (string, error) {
 	if strings.TrimSpace(projectPath) == "" {
 		return "", fmt.Errorf("project path is required")
 	}
@@ -147,7 +135,7 @@ func issueContextSection(issueContext string) string {
 	return "## Issue Context\n\n" + issueContext
 }
 
-func orchestratorSystemPrompt(project ProjectContext) string {
+func orchestratorSystemPrompt(project promptProject) string {
 	return fmt.Sprintf(`## AO Orchestrator Role
 
 You are the human-facing orchestrator for project %s.
@@ -193,7 +181,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 %s`, projectName(project), project.ID, project.ID, project.ID, projectContextSection(project))
 }
 
-func workerSystemPrompt(project ProjectContext) string {
+func workerSystemPrompt(project promptProject) string {
 	repoRules := `## Git and PR Rules
 
 - Work on a feature branch, not the default branch.
@@ -254,7 +242,7 @@ AO attributes PRs to this session when the source branch is this session branch 
 Keep branch names inside this session namespace so AO can track every PR you open.`
 }
 
-func projectContextSection(project ProjectContext) string {
+func projectContextSection(project promptProject) string {
 	return fmt.Sprintf(`## Project Context
 
 - Project: %s
@@ -264,7 +252,7 @@ func projectContextSection(project ProjectContext) string {
 - Path: %s`, project.ID, projectName(project), projectValue(project.Repo), projectValue(project.DefaultBranch), projectValue(project.Path))
 }
 
-func projectName(project ProjectContext) string {
+func projectName(project promptProject) string {
 	if name := strings.TrimSpace(project.Name); name != "" {
 		return name
 	}
