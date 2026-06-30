@@ -125,7 +125,7 @@ const appColumns = [
 			{
 				status: "Ready",
 				agent: "cursor",
-				title: "Build end-to-end onboarding test for published npm package",
+				title: "Ship onboarding smoke test",
 				branch: "test/onboarding-harness",
 				meta: "PR #204 · approved",
 			},
@@ -542,7 +542,7 @@ export function LandingHero() {
 		<section
 			data-testid="hero-section"
 			id="top"
-			className="relative overflow-hidden border-b border-[color:var(--border)] pb-10 pt-28 sm:pt-32 lg:pb-14"
+			className="landing-hero-section relative overflow-hidden border-b border-[color:var(--border)]"
 		>
 			<div
 				className="pointer-events-none absolute inset-0 opacity-[0.24]"
@@ -554,23 +554,18 @@ export function LandingHero() {
 					WebkitMaskImage: "radial-gradient(ellipse at 52% 42%, black 0%, transparent 68%)",
 				}}
 			/>
-			<div className="relative z-10 mx-auto w-full max-w-[1680px] px-5 sm:px-8 lg:px-12 xl:px-16">
-				<div className="mx-auto max-w-[1500px] text-center">
+			<div className="relative z-10 mx-auto w-full max-w-[1200px] px-5 sm:px-8 lg:px-12 xl:px-16">
+				<div className="mx-auto text-center">
 					<h1
 						data-testid="hero-headline"
-						className="mx-auto max-w-[1120px] font-sans font-[600] leading-[1.08] text-[#f2f3f5]"
-						style={{
-							fontFamily: '"Instrument Sans", "Inter", "Helvetica Neue", Arial, sans-serif',
-							fontSize: "clamp(34px, 3.55vw, 62px)",
-							letterSpacing: "-0.026em",
-						}}
+						className="landing-hero-heading mx-auto font-sans"
 					>
 						<span className="block">Stop babysitting coding agents.</span>
 						<span className="mt-2 block italic">
 							Start merging <span className="font-[620] text-[#93b4f8]">real work.</span>
 						</span>
 					</h1>
-					<p className="mx-auto mt-7 max-w-[680px] text-[15px] font-medium leading-[1.75] text-[color:var(--fg-muted)] sm:text-[17px]">
+					<p className="landing-body mx-auto mt-7">
 						Free, Apache 2.0 licensed, and runs on your laptop. Fork it, inspect it, and ship your first parallel agent
 						workflow in minutes.
 					</p>
@@ -599,7 +594,7 @@ export function LandingHero() {
 					</div>
 				</div>
 
-				<div className="mx-auto mt-12 flex max-w-[1600px] items-center gap-4 px-1 text-left">
+				<div className="mx-auto mt-16 flex max-w-[1200px] items-center gap-4 px-1 text-left">
 					<div className="h-px flex-1 bg-gradient-to-r from-transparent via-[color:var(--border-strong)] to-[color:var(--border-strong)]" />
 					<div className="whitespace-nowrap text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--fg-dim)]">
 						Live board preview

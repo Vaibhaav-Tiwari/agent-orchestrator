@@ -10,7 +10,7 @@ import { ScrollRevealProvider } from "../../components/ScrollRevealProvider";
 export default function LandingPage() {
 	return (
 		<ScrollRevealProvider>
-			<div className="relative z-10">
+			<div className="landing-page relative z-10 min-h-screen">
 				<LandingNav />
 				<LandingHero />
 				<LandingAgentsBar />

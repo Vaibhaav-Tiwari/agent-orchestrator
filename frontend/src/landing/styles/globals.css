@@ -159,11 +159,89 @@ body::-webkit-scrollbar,
 
 .container-page {
 	width: 100%;
-	max-width: 1680px;
+	max-width: 1200px;
 	margin-left: auto;
 	margin-right: auto;
 	padding-left: clamp(1.25rem, 3.8vw, 4rem);
 	padding-right: clamp(1.25rem, 3.8vw, 4rem);
+}
+
+.landing-hero-section {
+	padding-top: clamp(128px, 13vw, 176px);
+	padding-bottom: clamp(80px, 9vw, 128px);
+}
+
+.landing-section {
+	padding-top: clamp(80px, 10vw, 144px);
+	padding-bottom: clamp(80px, 10vw, 144px);
+}
+
+.landing-section-compact {
+	padding-top: clamp(48px, 6vw, 80px);
+	padding-bottom: clamp(48px, 6vw, 80px);
+}
+
+.landing-section-header {
+	margin-bottom: clamp(48px, 6vw, 80px);
+}
+
+.landing-section-stack {
+	display: grid;
+	gap: clamp(96px, 10vw, 144px);
+}
+
+.landing-eyebrow {
+	font-family: var(--font-mono);
+	font-size: 12px;
+	font-weight: 650;
+	line-height: 1;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--fg-dim);
+}
+
+.landing-eyebrow-accent {
+	color: var(--accent);
+}
+
+.landing-heading {
+	max-width: 760px;
+	font-size: clamp(32px, 4vw, 48px);
+	font-weight: 700;
+	line-height: 1.08;
+	letter-spacing: 0;
+	color: var(--fg);
+}
+
+.landing-heading-muted {
+	color: var(--fg-muted);
+}
+
+.landing-hero-heading {
+	max-width: 980px;
+	font-size: clamp(48px, 6vw, 64px);
+	font-weight: 700;
+	line-height: 1.05;
+	letter-spacing: 0;
+	color: var(--fg);
+}
+
+.landing-body {
+	max-width: 65ch;
+	font-size: clamp(16px, 1.4vw, 18px);
+	font-weight: 400;
+	line-height: 1.6;
+	letter-spacing: 0;
+	color: var(--fg-muted);
+}
+
+.landing-body-compact {
+	max-width: 65ch;
+	font-size: 16px;
+	font-weight: 400;
+	line-height: 1.6;
+	letter-spacing: 0;
+	color: var(--fg-muted);
 }
 
 .font-display {
@@ -197,6 +275,51 @@ body::-webkit-scrollbar,
 	animation-play-state: paused;
 }
 
+.agent-logo-tile {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 40px;
+	height: 40px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: rgba(255, 255, 255, 0.025);
+}
+
+.agent-logo-frame {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: rgba(255, 255, 255, 0.025);
+}
+
+.agent-logo-image {
+	width: 62%;
+	height: 62%;
+	object-fit: contain;
+	opacity: 0.9;
+	transition: opacity 0.16s ease;
+}
+
+.agent-logo-tile .agent-logo-image {
+	filter: grayscale(1) saturate(0) brightness(1.65) contrast(0.72);
+	opacity: 0.72;
+	transition:
+		opacity 0.16s ease,
+		filter 0.16s ease;
+}
+
+.group:hover .agent-logo-image {
+	opacity: 1;
+}
+
+.group:hover .agent-logo-tile .agent-logo-image {
+	filter: grayscale(1) saturate(0) brightness(1.9) contrast(0.84);
+	opacity: 0.92;
+}
+
 @keyframes agents-marquee {
 	from {
 		transform: translate3d(0, 0, 0);
@@ -218,17 +341,23 @@ body::-webkit-scrollbar,
 }
 
 .surface {
-	background: var(--bg-card);
+	background: #050506;
 	border: 1px solid var(--border);
-	border-radius: 12px;
+	border-radius: 8px;
+	box-shadow: none;
 	transition:
-		background-color 0.2s ease,
-		border-color 0.2s ease;
+		border-color 0.16s ease,
+		background-color 0.16s ease;
 }
 
 .surface:hover {
-	background: var(--bg-card-hover);
-	border-color: var(--border-strong);
+	background: #050506;
+	border-color: var(--border);
+}
+
+.landing-card-header {
+	background: #08090a;
+	border-bottom: 1px solid var(--border);
 }
 
 .tweet-shell {
@@ -279,9 +408,9 @@ body::-webkit-scrollbar,
 }
 
 .surface-elev {
-	background: var(--bg-elevated);
+	background: #050506;
 	border: 1px solid var(--border);
-	border-radius: 12px;
+	border-radius: 8px;
 }
 
 .lift {
@@ -328,6 +457,28 @@ body::-webkit-scrollbar,
 .terminal-header {
 	border-bottom: 1px solid var(--border);
 	background: var(--code-chrome);
+}
+
+.landing-code-panel {
+	animation: landing-code-panel-in 140ms ease-out both;
+}
+
+@keyframes landing-code-panel-in {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.landing-code-panel {
+		animation: none;
+	}
 }
 
 @keyframes pulse-dot {
@@ -430,15 +581,23 @@ body::-webkit-scrollbar,
 
 .landing-reveal {
 	opacity: 0;
-	transform: translateY(32px);
+	transform: translateY(24px);
 	transition:
-		opacity 0.8s ease-out,
-		transform 0.8s ease-out;
+		opacity 460ms ease-out,
+		transform 460ms ease-out;
 }
 
 .landing-reveal.visible {
 	opacity: 1;
 	transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.landing-reveal {
+		opacity: 1;
+		transform: none;
+		transition: none;
+	}
 }
 
 .landing-agent-dot {
@@ -588,6 +747,8 @@ body::-webkit-scrollbar,
 
 .landing-feature-stack-card {
 	will-change: transform;
+	gap: clamp(48px, 6vw, 80px);
+	align-items: center;
 }
 
 .landing-feature-stack-cover {
@@ -841,6 +1002,12 @@ body::-webkit-scrollbar,
 .landing-page .pb-20 {
 	padding-bottom: calc(var(--spacing) * 20);
 }
+.landing-page .pb-8 {
+	padding-bottom: calc(var(--spacing) * 8);
+}
+.landing-page .pb-10 {
+	padding-bottom: calc(var(--spacing) * 10);
+}
 
 .landing-page .px-2 {
 	padding-left: calc(var(--spacing) * 2);
@@ -962,6 +1129,15 @@ body::-webkit-scrollbar,
 }
 .landing-page .text-\[clamp\(2rem\,5vw\,3\.5rem\)\] {
 	font-size: clamp(2rem, 5vw, 3.5rem);
+}
+.landing-page .text-\[24px\] {
+	font-size: 24px;
+}
+
+@media (min-width: 640px) {
+	.landing-page .sm\:text-\[32px\] {
+		font-size: 32px;
+	}
 }
 
 /* Responsive md: utilities — fumadocs bundles .hidden but not all md: variants,

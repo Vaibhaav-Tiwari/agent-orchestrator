@@ -31,41 +31,41 @@ export function LandingAgentsBar() {
 		<section
 			id="agents"
 			data-testid="agents-marquee"
-			className="relative overflow-hidden border-y border-[color:var(--border)] bg-[color:var(--bg-deep)]"
+			className="landing-reveal relative overflow-hidden border-y border-[color:var(--border)] bg-[color:var(--bg-deep)]"
 		>
-			<div className="container-page py-7">
-				<div className="mx-auto flex max-w-[1280px] flex-wrap items-baseline justify-between gap-5">
+			<div className="container-page pt-10 pb-8">
+				<div className="mx-auto flex max-w-[1120px] flex-wrap items-baseline justify-between gap-8">
 					<div className="flex flex-wrap items-baseline gap-x-4 gap-y-2">
-						<span className="serial-num font-mono text-xs">Coverage</span>
-						<h2 className="font-display text-2xl font-bold leading-none tracking-tight text-[color:var(--fg)] sm:text-3xl">
+						<span className="landing-eyebrow">Coverage</span>
+						<h2 className="text-[24px] font-bold leading-tight text-[color:var(--fg)] sm:text-[32px]">
 							One Daemon. <span className="text-[color:var(--fg-muted)]">23 Agent Harnesses.</span>
 						</h2>
 					</div>
-					<p className="max-w-md font-mono text-xs leading-relaxed text-[color:var(--fg-dim)]">
+					<p className="max-w-[54ch] text-[14px] leading-[1.6] text-[color:var(--fg-muted)]">
 						Swap harnesses per project. The daemon does not care which CLI is in the pane - adapters obey one port.
 					</p>
 				</div>
 			</div>
 
-			<div className="container-page pb-6">
+			<div className="container-page pb-10">
 				<div className="relative mx-auto max-w-3xl overflow-hidden">
 					<div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-20 bg-gradient-to-r from-[color:var(--bg-deep)] to-transparent" />
 					<div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-20 bg-gradient-to-l from-[color:var(--bg-deep)] to-transparent" />
-					<div className="agents-marquee-track flex w-max items-end gap-3">
+					<div className="agents-marquee-track flex w-max items-end gap-4">
 						{marqueeAgents.map((agent, index) => (
 							<div
 								key={`${agent.id}-${index}`}
-								className="group flex h-[78px] w-[118px] shrink-0 flex-col items-center justify-end gap-2 px-2 py-2"
+								className="group flex h-[82px] w-[112px] shrink-0 flex-col items-center justify-end gap-2 px-2 py-2"
 							>
-								<div className="flex h-10 items-end justify-center">
+								<div className="agent-logo-tile">
 									<img
 										src={agent.src}
 										alt=""
 										referrerPolicy="no-referrer"
-										className="h-8 max-w-[44px] object-contain transition-transform duration-200 ease-out group-hover:scale-110"
+										className="agent-logo-image"
 									/>
 								</div>
-								<div className="max-w-full truncate font-mono text-[14px] leading-none tracking-[0.04em] text-[color:var(--fg-dim)]">
+								<div className="max-w-full truncate font-mono text-[12px] leading-none tracking-[0.04em] text-[color:var(--fg-dim)]">
 									{agent.name}
 								</div>
 							</div>

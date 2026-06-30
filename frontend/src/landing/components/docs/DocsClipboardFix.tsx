@@ -69,6 +69,8 @@ function getLinkText(button: HTMLButtonElement) {
 
 export function DocsClipboardFix() {
 	useEffect(() => {
+		const timers = new WeakMap<HTMLButtonElement, number>();
+
 		const onClick = (event: MouseEvent) => {
 			const button = (event.target as Element | null)?.closest("button");
 			if (!(button instanceof HTMLButtonElement)) return;
@@ -86,17 +88,23 @@ export function DocsClipboardFix() {
 
 			void writeClipboard(text).then((copied) => {
 				if (!copied) return;
+				const activeTimer = timers.get(button);
+				if (activeTimer) window.clearTimeout(activeTimer);
 				button.dataset.checked = "true";
 				button.setAttribute("aria-label", isCodeCopy ? "Copied Text" : "Copied Link");
-				window.setTimeout(() => {
+				const resetTimer = window.setTimeout(() => {
 					delete button.dataset.checked;
 					button.setAttribute("aria-label", isCodeCopy ? "Copy Text" : "Copy Link");
+					timers.delete(button);
 				}, 1500);
+				timers.set(button, resetTimer);
 			});
 		};
 
 		document.addEventListener("click", onClick, true);
-		return () => document.removeEventListener("click", onClick, true);
+		return () => {
+			document.removeEventListener("click", onClick, true);
+		};
 	}, []);
 
 	return null;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const tabs = [
 	{
@@ -93,6 +93,23 @@ function CommandLines({ lines }: { lines: string[] }) {
 	);
 }
 
+function CopyIcon({ className = "" }: { className?: string }) {
+	return (
+		<svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+			<rect width="14" height="14" x="8" y="8" rx="2" />
+			<path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+		</svg>
+	);
+}
+
+function CheckIcon({ className = "" }: { className?: string }) {
+	return (
+		<svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+			<path d="M20 6 9 17l-5-5" />
+		</svg>
+	);
+}
+
 async function copyText(text: string) {
 	if (navigator.clipboard?.writeText) {
 		try {
@@ -122,12 +139,20 @@ async function copyText(text: string) {
 export function LandingLiveDemo() {
 	const [active, setActive] = useState("install");
 	const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+	const copyResetRef = useRef<number | null>(null);
 	const current = tabs.find((tab) => tab.id === active) ?? tabs[0];
+
+	useEffect(() => {
+		return () => {
+			if (copyResetRef.current) window.clearTimeout(copyResetRef.current);
+		};
+	}, []);
 
 	const onCopy = async () => {
 		const copied = await copyText(current.lines.join("\n"));
+		if (copyResetRef.current) window.clearTimeout(copyResetRef.current);
 		setCopyState(copied ? "copied" : "failed");
-		window.setTimeout(() => setCopyState("idle"), 1600);
+		copyResetRef.current = window.setTimeout(() => setCopyState("idle"), 1500);
 	};
 
 	return (
@@ -169,8 +194,10 @@ export function LandingLiveDemo() {
 							type="button"
 							onClick={onCopy}
 							data-testid="demo-copy-btn"
-							className="rounded border border-[color:var(--border-strong)] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-[color:var(--fg-muted)] transition hover:border-[color:var(--border-bright)] hover:text-[color:var(--fg)]"
+							className="inline-flex min-w-[88px] items-center justify-center gap-1.5 rounded border border-[color:var(--border-strong)] px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-[color:var(--fg-muted)] opacity-70 transition-[opacity,border-color,color,background-color] duration-150 hover:border-[color:var(--border-bright)] hover:bg-white/[0.035] hover:text-[color:var(--fg)] hover:opacity-100"
+							aria-live="polite"
 						>
+							{copyState === "copied" ? <CheckIcon className="h-3.5 w-3.5" /> : <CopyIcon className="h-3.5 w-3.5" />}
 							{copyState === "copied" ? "Copied" : copyState === "failed" ? "Failed" : "Copy"}
 						</button>
 					</div>
@@ -181,10 +208,10 @@ export function LandingLiveDemo() {
 								<button
 									key={tab.id}
 									onClick={() => setActive(tab.id)}
-									className={`-mb-px rounded-t-md border-x border-t px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] transition-colors ${
+									className={`-mb-px rounded-t-md border-x border-t px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.16em] transition-[background-color,border-color,color] duration-150 ${
 										isActive
 											? "border-[color:var(--border-strong)] bg-[color:var(--code-bg)] text-[color:var(--code-fg)]"
-											: "border-transparent text-[color:var(--code-muted)] hover:text-[color:var(--code-fg)]"
+											: "border-transparent text-[color:var(--code-muted)] hover:bg-white/[0.025] hover:text-[color:var(--code-fg)]"
 									}`}
 								>
 									{tab.label}
@@ -192,8 +219,10 @@ export function LandingLiveDemo() {
 							);
 						})}
 					</div>
-					<div data-testid="demo-code-block" className="bg-[color:var(--code-bg)] p-5 sm:p-7">
-						<CommandLines lines={current.lines} />
+					<div data-testid="demo-code-block" className="min-h-[436px] bg-[color:var(--code-bg)] p-5 sm:p-7">
+						<div key={active} className="landing-code-panel">
+							<CommandLines lines={current.lines} />
+						</div>
 					</div>
 				</div>
 			</div>

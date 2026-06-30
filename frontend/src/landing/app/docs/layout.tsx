@@ -83,6 +83,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 				links={links}
 				themeSwitch={{ enabled: false }}
 				nav={{
+					url: "/",
 					title: (
 						<span className="flex items-center gap-2 font-semibold">
 							<Image

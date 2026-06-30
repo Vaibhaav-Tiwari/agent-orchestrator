@@ -76,32 +76,6 @@ const primaryAgents: AgentHarness[] = [
 	},
 ];
 
-const adapterNames = [
-	"Claude Code",
-	"Codex",
-	"Cursor",
-	"OpenCode",
-	"Aider",
-	"Amp",
-	"Goose",
-	"Copilot",
-	"Grok",
-	"Qwen",
-	"Kimi",
-	"Crush",
-	"Cline",
-	"Droid",
-	"Devin",
-	"Auggie",
-	"Continue",
-	"Kiro",
-	"Kilo Code",
-	"Agy",
-	"Roo Code",
-	"Windsurf",
-	"Vibe",
-];
-
 const workspaceSessions = [
 	{
 		id: "ao-204",
@@ -217,31 +191,28 @@ export function LandingFeatures() {
 	);
 
 	return (
-		<section id="features" data-testid="features-grid" className="relative py-24 sm:py-32">
+		<section id="features" data-testid="features-grid" className="landing-reveal landing-section relative">
 			<div className="container-page">
-				<div className="mb-12 grid items-end gap-8 lg:grid-cols-12">
+				<div className="landing-section-header grid items-end gap-8 lg:grid-cols-12">
 					<div className="lg:col-span-7">
-						<div className="serial-num mb-3 font-mono text-xs">What&apos;s inside</div>
-						<h2
-							className="max-w-5xl font-sans font-semibold leading-[1.02] tracking-[-0.03em] text-[color:var(--fg)]"
-							style={{ fontSize: "clamp(34px, 3.45vw, 52px)" }}
-						>
+						<div className="landing-eyebrow mb-4">What&apos;s inside</div>
+						<h2 className="landing-heading">
 							Run the agent you already use.
-							<span className="block text-[color:var(--fg-muted)]" style={{ fontSize: "clamp(28px, 2.6vw, 42px)" }}>
+							<span className="landing-heading-muted block">
 								AO wraps the workflow around it.
 							</span>
 						</h2>
 					</div>
 					<div className="lg:col-span-5">
-						<p className="max-w-xl text-[15px] leading-relaxed text-[color:var(--fg-muted)]">
+						<p className="landing-body-compact">
 							Claude Code, Codex, Cursor, OpenCode, Aider, Goose, Droid, Kilo and the rest stay native terminal tools.
 							AO standardizes launch, restore, hooks, activity and PR ownership through one adapter contract.
 						</p>
 					</div>
 				</div>
 
-				<div className="relative space-y-16 pb-4">
-					<div className="landing-feature-stack-card grid gap-5 lg:grid-cols-[0.78fr_1.22fr]">
+				<div className="landing-section-stack relative pb-4">
+					<div className="landing-feature-stack-card grid lg:grid-cols-[0.78fr_1.22fr]">
 						<FeatureNarrative worker={worker} orchestrator={orchestrator} />
 						<AgentHarnessDemo
 							worker={worker}
@@ -253,17 +224,17 @@ export function LandingFeatures() {
 						/>
 					</div>
 
-					<div className="landing-feature-stack-card grid gap-5 lg:grid-cols-[1.18fr_0.82fr]">
+					<div className="landing-feature-stack-card grid lg:grid-cols-[1.18fr_0.82fr]">
 						<WorkspaceIsolationDemo activeId={workspaceId} onSelect={setWorkspaceId} workspace={workspace} />
 						<WorkspaceNarrative workspace={workspace} />
 					</div>
 
-					<div className="landing-feature-stack-card grid gap-5 lg:grid-cols-[0.82fr_1.18fr]">
+					<div className="landing-feature-stack-card grid lg:grid-cols-[0.82fr_1.18fr]">
 						<FeedbackNarrative feedback={feedback} />
 						<FeedbackRoutingDemo activeId={feedbackId} onSelect={setFeedbackId} feedback={feedback} />
 					</div>
 
-					<div className="landing-feature-stack-card grid gap-5 lg:grid-cols-[1.18fr_0.82fr]">
+					<div className="landing-feature-stack-card grid lg:grid-cols-[1.18fr_0.82fr]">
 						<DaemonControlDemo />
 						<DaemonNarrative />
 					</div>
@@ -311,10 +282,11 @@ function AgentHarnessDemo({
 	onOrchestratorChange: (id: string) => void;
 }) {
 	const [targetSlot, setTargetSlot] = useState<"worker" | "orchestrator">("worker");
+	const visibleAgents = primaryAgents.filter((agent) => ["claude-code", "codex", "cursor", "goose"].includes(agent.id));
 
 	return (
-		<article className="surface relative overflow-hidden bg-[#010102] p-0">
-			<div className="flex items-center justify-between border-b border-[color:var(--border)] px-5 py-4">
+		<article className="surface relative max-h-[500px] overflow-hidden p-0">
+			<div className="landing-card-header flex items-center justify-between px-5 py-4">
 				<div className="flex items-center gap-3">
 					<img src="/ao-logo-transparent.png" alt="" className="h-7 w-7 object-contain" />
 					<div>
@@ -327,8 +299,8 @@ function AgentHarnessDemo({
 				</div>
 			</div>
 
-			<div className="grid gap-0 lg:grid-cols-[0.86fr_1fr]">
-				<div className="border-b border-[color:var(--border)] p-5 lg:border-b-0 lg:border-r">
+			<div className="grid gap-0 lg:grid-cols-[0.72fr_1fr]">
+				<div className="border-b border-[color:var(--border)] p-4 lg:border-b-0 lg:border-r">
 					<div className="mb-4 grid gap-3 sm:grid-cols-2">
 						<AgentSelectLabel
 							label="Worker agent"
@@ -344,8 +316,8 @@ function AgentHarnessDemo({
 						/>
 					</div>
 
-					<div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-						{primaryAgents.map((agent) => (
+					<div className="grid grid-cols-2 gap-2">
+						{visibleAgents.map((agent) => (
 							<button
 								key={agent.id}
 								type="button"
@@ -357,18 +329,15 @@ function AgentHarnessDemo({
 									setTargetSlot("orchestrator");
 									onOrchestratorChange(agent.id);
 								}}
-								className={`group relative flex min-h-[82px] cursor-pointer flex-col items-start justify-between overflow-hidden rounded-lg border p-3 text-left transition duration-200 ease-out hover:-translate-y-0.5 hover:border-white/15 hover:bg-white/[0.045] ${
+								className={`group relative flex min-h-[70px] cursor-pointer flex-col items-start justify-between overflow-hidden rounded-lg border p-3 text-left transition duration-200 ease-out hover:-translate-y-0.5 hover:border-white/15 hover:bg-white/[0.045] ${
 									workerId === agent.id
-										? "border-white/18 bg-white/[0.055] shadow-[inset_0_0_0_1px_rgba(147,180,248,0.16)]"
+										? "border-white/18 bg-white/[0.055]"
 										: "border-[color:var(--border)] bg-white/[0.025]"
 								}`}
 								aria-pressed={workerId === agent.id}
 							>
-								{workerId === agent.id ? (
-									<span className="absolute inset-y-3 left-0 w-px rounded-full bg-[color:var(--accent)] opacity-80" />
-								) : null}
 								<div className="flex w-full items-center justify-between gap-2">
-									<AgentLogo agent={agent} className="h-7 w-7" />
+									<AgentLogo agent={agent} className="h-6 w-6" />
 									<span className="font-mono text-[9px] uppercase tracking-[0.16em] text-[color:var(--fg-dim)]">
 										{agent.restore.includes("fresh") ? "new" : "resume"}
 									</span>
@@ -381,12 +350,12 @@ function AgentHarnessDemo({
 						))}
 					</div>
 
-					<div className="mt-4 text-[12px] leading-relaxed text-[color:var(--fg-dim)]">
-						Click an agent to set the worker. Double-click an agent to promote it into the orchestrator slot.
+					<div className="mt-3 text-[12px] leading-relaxed text-[color:var(--fg-dim)]">
+						Click sets the worker. Double-click promotes.
 					</div>
 				</div>
 
-				<div className="p-5">
+				<div className="p-4">
 					<div className="mb-4 flex items-center justify-between gap-3">
 						<div>
 							<div className="text-lg font-semibold tracking-[-0.02em] text-[color:var(--fg)]">Launch preview</div>
@@ -394,7 +363,7 @@ function AgentHarnessDemo({
 								same daemon route, different native CLI
 							</div>
 						</div>
-						<div className="rounded-md bg-[color:var(--accent-soft)] px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-[color:var(--accent)]">
+						<div className="rounded-md border border-[color:var(--border)] bg-white/[0.025] px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-[color:var(--fg-dim)]">
 							ready
 						</div>
 					</div>
@@ -416,33 +385,6 @@ function AgentHarnessDemo({
 						</div>
 					</div>
 
-					<div className="mt-4 grid gap-2 sm:grid-cols-3">
-						<PipelineStep title="detect" detail="binary on PATH" active />
-						<PipelineStep title="launch" detail={worker.delivery} active />
-						<PipelineStep title="observe" detail={worker.hooks} active />
-					</div>
-
-					<div className="mt-5 overflow-hidden rounded-xl border border-[color:var(--border)] bg-white/[0.02]">
-						<div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-4">
-							<AdapterNode agent={orchestrator} label="orchestrator" />
-							<div className="relative flex h-px min-w-12 items-center justify-center bg-[color:var(--border)]">
-								<span className="landing-adapter-pulse absolute h-1.5 w-1.5 rounded-full bg-[color:var(--accent)]" />
-							</div>
-							<AdapterNode agent={worker} label="worker" />
-						</div>
-						<div className="border-t border-[color:var(--border)] px-4 py-3">
-							<div className="flex flex-wrap gap-2">
-								{adapterNames.map((name) => (
-									<span
-										key={name}
-										className="rounded-full border border-[color:var(--border)] bg-black/30 px-2.5 py-1 font-mono text-[10px] text-[color:var(--fg-dim)]"
-									>
-										{name}
-									</span>
-								))}
-							</div>
-						</div>
-					</div>
 				</div>
 			</div>
 		</article>
@@ -465,9 +407,7 @@ function AgentSelectLabel({
 			<div className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[color:var(--fg-dim)]">{label}</div>
 			<div
 				className={`flex items-center gap-2 rounded-lg border px-3 py-2 transition duration-200 ${
-					active
-						? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]"
-						: "border-[color:var(--border)] bg-white/[0.035]"
+					active ? "border-white/18 bg-white/[0.055]" : "border-[color:var(--border)] bg-white/[0.035]"
 				}`}
 			>
 				<AgentLogo agent={agent} className="h-6 w-6" />
@@ -484,7 +424,7 @@ function AgentLogo({ agent, className }: { agent: AgentHarness; className: strin
 	if (!agent.logo) {
 		return (
 			<div
-				className={`${className} flex items-center justify-center rounded-md bg-[color:var(--accent-soft)] text-xs font-bold`}
+				className={`${className} agent-logo-frame text-xs font-bold text-[color:var(--fg-muted)]`}
 			>
 				{agent.name.slice(0, 1)}
 			</div>
@@ -492,7 +432,9 @@ function AgentLogo({ agent, className }: { agent: AgentHarness; className: strin
 	}
 
 	return (
-		<img src={agent.logo} alt="" referrerPolicy="no-referrer" className={`${className} rounded-md object-contain`} />
+		<span className={`${className} agent-logo-frame`}>
+			<img src={agent.logo} alt="" referrerPolicy="no-referrer" className="agent-logo-image" />
+		</span>
 	);
 }
 
@@ -524,32 +466,6 @@ function TerminalLine({
 	);
 }
 
-function PipelineStep({ title, detail, active }: { title: string; detail: string; active?: boolean }) {
-	return (
-		<div className="rounded-lg border border-[color:var(--border)] bg-white/[0.025] p-3">
-			<div className="flex items-center gap-2">
-				<span
-					className={`h-1.5 w-1.5 rounded-full ${active ? "landing-sse-pulse bg-[color:var(--accent)]" : "bg-[color:var(--fg-dim)]"}`}
-				/>
-				<span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[color:var(--fg-muted)]">{title}</span>
-			</div>
-			<div className="mt-2 truncate text-[12px] text-[color:var(--fg-dim)]">{detail}</div>
-		</div>
-	);
-}
-
-function AdapterNode({ agent, label }: { agent: AgentHarness; label: string }) {
-	return (
-		<div className="flex min-w-0 items-center gap-3">
-			<AgentLogo agent={agent} className="h-9 w-9" />
-			<div className="min-w-0">
-				<div className="font-mono text-[10px] uppercase tracking-[0.18em] text-[color:var(--fg-dim)]">{label}</div>
-				<div className="truncate text-sm font-semibold text-[color:var(--fg)]">{agent.name}</div>
-			</div>
-		</div>
-	);
-}
-
 function WorkspaceIsolationDemo({
 	activeId,
 	onSelect,
@@ -562,10 +478,10 @@ function WorkspaceIsolationDemo({
 	const [actionState, setActionState] = useState("session attached");
 
 	return (
-		<article className="surface relative min-h-[640px] overflow-hidden bg-[#010102] p-0">
-			<div className="grid h-full min-h-[640px] grid-cols-[220px_1fr]">
+		<article className="surface relative max-h-[500px] overflow-hidden p-0">
+			<div className="grid h-full min-h-[500px] grid-cols-[220px_1fr]">
 				<aside className="flex min-h-0 flex-col border-r border-[color:var(--border)] bg-[#050506]">
-					<div className="flex items-center justify-between border-b border-[color:var(--border)] px-4 py-4">
+					<div className="landing-card-header flex items-center justify-between px-4 py-4">
 						<div className="flex min-w-0 items-center gap-2.5">
 							<img src="/ao-logo-transparent.png" alt="" className="h-6 w-6 object-contain" />
 							<div className="truncate text-[13px] font-semibold text-[color:var(--fg)]">Agent Orchestrator</div>
@@ -621,7 +537,7 @@ function WorkspaceIsolationDemo({
 				</aside>
 
 				<div className="min-w-0">
-					<div className="flex items-center justify-between border-b border-[color:var(--border)] px-5 py-4">
+					<div className="landing-card-header flex items-center justify-between px-5 py-4">
 						<div className="min-w-0">
 							<div className="flex items-center gap-3">
 								<h4 className="text-xl font-semibold tracking-[-0.03em] text-[color:var(--fg)]">Session</h4>
@@ -654,7 +570,7 @@ function WorkspaceIsolationDemo({
 						</div>
 					</div>
 
-					<div className="grid min-h-[575px] grid-cols-[1fr_285px]">
+					<div className="grid min-h-[415px] grid-cols-1">
 						<div className="flex min-w-0 flex-col border-r border-[color:var(--border)]">
 							<div className="flex items-center justify-between border-b border-[color:var(--border)] bg-white/[0.015] px-4 py-3">
 								<div>
@@ -689,51 +605,6 @@ function WorkspaceIsolationDemo({
 							</div>
 						</div>
 
-						<aside className="bg-[#050506] p-4">
-							<div className="mb-4">
-								<div className="font-mono text-[10px] uppercase tracking-[0.22em] text-[color:var(--fg-dim)]">
-									Inspector
-								</div>
-								<div className="mt-2 text-[16px] font-semibold tracking-[-0.02em] text-[color:var(--fg)]">
-									Workspace facts
-								</div>
-							</div>
-
-							<div className="space-y-2">
-								<InspectorFact label="runtime" value="tmux pane" />
-								<InspectorFact label="worktree" value={workspace.path} />
-								<InspectorFact label="branch" value={workspace.branch} />
-								<InspectorFact label="owner" value={workspace.agent} />
-							</div>
-
-							<div className="mt-5 border-t border-[color:var(--border)] pt-4">
-								<div className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[color:var(--fg-dim)]">
-									changed files
-								</div>
-								<div className="space-y-2">
-									{workspace.files.map((file) => (
-										<div
-											key={file}
-											className="rounded-md border border-[color:var(--border)] bg-white/[0.025] px-2.5 py-2 font-mono text-[10px] leading-snug text-[color:var(--fg-muted)]"
-										>
-											{file}
-										</div>
-									))}
-								</div>
-							</div>
-
-							<div className="mt-5 rounded-lg border border-[color:var(--border)] bg-white/[0.025] p-3">
-								<div className="mb-2 flex items-center gap-2">
-									<span className="h-1.5 w-1.5 rounded-full bg-[color:var(--status-ok)]" />
-									<span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[color:var(--fg-muted)]">
-										isolated
-									</span>
-								</div>
-								<p className="text-[12px] leading-relaxed text-[color:var(--fg-dim)]">
-									This pane, branch, and diff belong to one AO session.
-								</p>
-							</div>
-						</aside>
 					</div>
 				</div>
 			</div>
@@ -801,8 +672,8 @@ function FeedbackRoutingDemo({
 	const [sentSession, setSentSession] = useState<string | null>(null);
 
 	return (
-		<article className="surface relative min-h-[640px] overflow-hidden bg-[#010102] p-0">
-			<div className="flex items-center justify-between border-b border-[color:var(--border)] px-5 py-4">
+		<article className="surface relative max-h-[500px] overflow-hidden p-0">
+			<div className="landing-card-header flex items-center justify-between px-5 py-4">
 				<div>
 					<div className="text-sm font-semibold text-[color:var(--fg)]">Pull requests</div>
 					<div className="font-mono text-[11px] text-[color:var(--fg-dim)]">
@@ -814,7 +685,7 @@ function FeedbackRoutingDemo({
 				</div>
 			</div>
 
-			<div className="grid min-h-[584px] grid-cols-[280px_1fr]">
+			<div className="grid min-h-[424px] grid-cols-[280px_1fr]">
 				<aside className="border-r border-[color:var(--border)] bg-[#050506] p-4">
 					<div className="mb-3 font-mono text-[10px] uppercase tracking-[0.22em] text-[color:var(--fg-dim)]">
 						Open PRs
@@ -876,50 +747,7 @@ function FeedbackRoutingDemo({
 						</button>
 					</div>
 
-					<div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
-						<div className="space-y-4">
-							<div className="rounded-xl border border-[color:var(--border)] bg-[#050507] p-4">
-								<div className="mb-3 font-mono text-[10px] uppercase tracking-[0.2em] text-[color:var(--fg-dim)]">
-									checks
-								</div>
-								<div className="space-y-2">
-									{feedback.checks.map((check) => (
-										<div
-											key={check.name}
-											className="flex items-center justify-between rounded-md border border-[color:var(--border)] bg-white/[0.025] px-3 py-2"
-										>
-											<span className="flex items-center gap-2 text-[13px] text-[color:var(--fg-muted)]">
-												<span className="h-1.5 w-1.5 rounded-full" style={{ background: check.color }} />
-												{check.name}
-											</span>
-											<span
-												className="font-mono text-[10px] uppercase tracking-[0.14em]"
-												style={{ color: check.color }}
-											>
-												{check.state}
-											</span>
-										</div>
-									))}
-								</div>
-							</div>
-
-							<div className="rounded-xl border border-[color:var(--border)] bg-[#050507] p-4">
-								<div className="mb-3 font-mono text-[10px] uppercase tracking-[0.2em] text-[color:var(--fg-dim)]">
-									review comments
-								</div>
-								<div className="space-y-2">
-									{feedback.comments.map((comment) => (
-										<div
-											key={comment}
-											className="rounded-md border border-[color:var(--border)] bg-white/[0.025] px-3 py-2 text-[12px] leading-relaxed text-[color:var(--fg-muted)]"
-										>
-											{comment}
-										</div>
-									))}
-								</div>
-							</div>
-						</div>
-
+					<div>
 						<div className="overflow-hidden rounded-xl border border-[color:var(--border)] bg-black">
 							<div className="flex items-center justify-between border-b border-[color:var(--border)] px-3 py-2">
 								<div className="flex items-center gap-1.5">
@@ -946,11 +774,6 @@ function FeedbackRoutingDemo({
 						</div>
 					</div>
 
-					<div className="mt-4 grid gap-2 sm:grid-cols-3">
-						<PipelineStep title="observe" detail="GitHub facts" active />
-						<PipelineStep title="match" detail={feedback.session} active />
-						<PipelineStep title="nudge" detail={feedback.agent} active />
-					</div>
 				</div>
 			</div>
 		</article>
@@ -959,8 +782,8 @@ function FeedbackRoutingDemo({
 
 function DaemonControlDemo() {
 	return (
-		<article className="surface relative min-h-[640px] overflow-hidden bg-[#010102] p-0">
-			<div className="flex items-center justify-between border-b border-[color:var(--border)] px-5 py-4">
+		<article className="surface relative max-h-[500px] overflow-hidden p-0">
+			<div className="landing-card-header flex items-center justify-between px-5 py-4">
 				<div>
 					<div className="text-sm font-semibold text-[color:var(--fg)]">Local control plane</div>
 					<div className="font-mono text-[11px] text-[color:var(--fg-dim)]">
@@ -972,7 +795,7 @@ function DaemonControlDemo() {
 				</div>
 			</div>
 
-			<div className="grid min-h-[584px] grid-cols-[1fr_300px]">
+			<div className="grid min-h-[424px] grid-cols-[1fr_300px]">
 				<div className="border-r border-[color:var(--border)] p-5">
 					<div className="overflow-hidden rounded-xl border border-[color:var(--border)] bg-black">
 						<div className="flex items-center justify-between border-b border-[color:var(--border)] px-3 py-2">
@@ -995,23 +818,6 @@ function DaemonControlDemo() {
 						</div>
 					</div>
 
-					<div className="mt-4 grid gap-3 lg:grid-cols-3">
-						<DaemonNode title="CLI" body="ao spawn, send, status" active />
-						<DaemonNode title="Daemon" body="HTTP over loopback" active />
-						<DaemonNode title="Desktop" body="board, terminal, settings" active />
-					</div>
-
-					<div className="mt-4 rounded-xl border border-[color:var(--border)] bg-[#050507] p-4">
-						<div className="mb-3 font-mono text-[10px] uppercase tracking-[0.2em] text-[color:var(--fg-dim)]">
-							event stream
-						</div>
-						<div className="space-y-2">
-							<EventRow seq="2401" label="session_created" detail="ao-204" />
-							<EventRow seq="2402" label="pr_check_recorded" detail="e2e failed" />
-							<EventRow seq="2403" label="session_updated" detail="needs_you" />
-							<EventRow seq="2404" label="terminal_snapshot" detail="attached" />
-						</div>
-					</div>
 				</div>
 
 				<aside className="bg-[#050506] p-4">
@@ -1081,21 +887,21 @@ function FeatureCopy({
 	meta?: string;
 }) {
 	return (
-		<article className="relative flex min-h-[640px] flex-col justify-center overflow-hidden border border-[color:var(--border)] bg-[#0b0b0b] p-7 sm:p-10">
-			<div className="max-w-[34rem]">
+		<article className="relative flex min-h-[420px] flex-col justify-center overflow-hidden py-6 lg:min-h-[520px]">
+			<div className="max-w-[32rem]">
 				<div className="mb-5 flex items-center gap-3">
-					<div className="font-mono text-[10px] uppercase tracking-[0.24em] text-[color:var(--accent)]">{eyebrow}</div>
+					<div className="landing-eyebrow landing-eyebrow-accent">{eyebrow}</div>
 					{meta ? (
 						<div className="rounded-full border border-[color:var(--border)] bg-black/35 px-2.5 py-1 font-mono text-[10px] text-[color:var(--fg-dim)]">
 							{meta}
 						</div>
 					) : null}
 				</div>
-				<h3 className="text-4xl font-semibold leading-[1.02] tracking-[-0.045em] text-[color:var(--fg)] sm:text-5xl">
+				<h3 className="landing-heading max-w-[620px]">
 					{title}
-					<span className="block text-[color:var(--fg-muted)]">{accent}</span>
+					<span className="landing-heading-muted block">{accent}</span>
 				</h3>
-				<div className="mt-7 space-y-4 text-[17px] leading-[1.55] text-[color:var(--fg-muted)]">{children}</div>
+				<div className="landing-body mt-7 space-y-4">{children}</div>
 			</div>
 		</article>
 	);
@@ -1103,28 +909,4 @@ function FeatureCopy({
 
 function FeatureStrong({ children }: { children: ReactNode }) {
 	return <span className="font-medium text-[color:var(--fg)]">{children}</span>;
-}
-
-function DaemonNode({ title, body, active }: { title: string; body: string; active?: boolean }) {
-	return (
-		<div className="rounded-xl border border-[color:var(--border)] bg-white/[0.025] p-3">
-			<div className="flex items-center gap-2">
-				<span
-					className={`h-1.5 w-1.5 rounded-full ${active ? "bg-[color:var(--accent)]" : "bg-[color:var(--fg-dim)]"}`}
-				/>
-				<span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[color:var(--fg-muted)]">{title}</span>
-			</div>
-			<div className="mt-2 text-[12px] leading-snug text-[color:var(--fg-dim)]">{body}</div>
-		</div>
-	);
-}
-
-function EventRow({ seq, label, detail }: { seq: string; label: string; detail: string }) {
-	return (
-		<div className="grid grid-cols-[48px_1fr_auto] items-center gap-3 rounded-md border border-[color:var(--border)] bg-white/[0.025] px-3 py-2 font-mono text-[10px]">
-			<span className="text-[color:var(--fg-dim)]">{seq}</span>
-			<span className="text-[color:var(--fg-muted)]">{label}</span>
-			<span className="text-[color:var(--accent)]">{detail}</span>
-		</div>
-	);
 }

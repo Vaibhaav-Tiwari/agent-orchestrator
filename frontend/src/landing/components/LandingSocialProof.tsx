@@ -190,25 +190,22 @@ export function LandingSocialProof() {
 		<section
 			id="testimonials"
 			data-testid="social-proof"
-			className="relative overflow-hidden border-t border-[color:var(--border)] py-24 sm:py-32"
+			className="landing-reveal landing-section relative overflow-hidden border-t border-[color:var(--border)]"
 		>
 			<div className="container-page">
 				<div className="mx-auto max-w-[1320px]">
-					<div className="mb-12 grid items-end gap-8 lg:grid-cols-12">
+					<div className="landing-section-header grid items-end gap-8 lg:grid-cols-12">
 						<div className="lg:col-span-7">
-							<div className="serial-num mb-3 font-mono text-xs">In the wild</div>
-							<h2
-								className="font-display font-bold leading-[1.02] tracking-tight text-[color:var(--fg)]"
-								style={{ fontSize: "clamp(32px, 4.8vw, 60px)" }}
-							>
+							<div className="landing-eyebrow mb-4">In the wild</div>
+							<h2 className="landing-heading">
 								People are already{" "}
-								<span className="font-editorial font-medium italic text-[color:var(--accent)]">
+								<span className="landing-heading-muted">
 									building around it.
 								</span>
 							</h2>
 						</div>
 						<div className="lg:col-span-5">
-							<p className="text-[15px] leading-relaxed text-[color:var(--fg-muted)]">
+							<p className="landing-body-compact">
 								Real posts from builders, researchers, and early users, embedded directly from X.
 							</p>
 						</div>
@@ -278,9 +275,9 @@ function TweetCard({
 	return (
 		<article
 			data-testid={`tweet-card-${index}`}
-			className="surface mb-5 inline-block w-full break-inside-avoid overflow-hidden transition duration-300 hover:-translate-y-0.5 hover:border-[color:var(--accent-soft)]"
+			className="surface mb-5 inline-block w-full break-inside-avoid overflow-hidden"
 		>
-			<div className="flex items-center justify-between gap-3 border-b border-[color:var(--border)] bg-[color:var(--bg-chrome)] px-4 py-3">
+			<div className="landing-card-header flex items-center justify-between gap-3 px-4 py-3">
 				<div className="flex min-w-0 items-center gap-2">
 					<MessageCircleIcon className="h-4 w-4 shrink-0 text-[color:var(--accent)]" />
 					<div className="min-w-0">
