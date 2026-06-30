@@ -585,15 +585,7 @@ function ProjectItem({
 // One worker-session row. Reads as a link by default; a hover-revealed pencil
 // flips the label into an inline input (Enter/blur saves, Escape cancels) that
 // persists through the daemon rename endpoint, so the new name survives reload.
-function SessionRow({
-	session,
-	active,
-	onOpen,
-}: {
-	session: WorkspaceSession;
-	active: boolean;
-	onOpen: () => void;
-}) {
+function SessionRow({ session, active, onOpen }: { session: WorkspaceSession; active: boolean; onOpen: () => void }) {
 	const queryClient = useQueryClient();
 	const [isEditing, setIsEditing] = useState(false);
 	const [draft, setDraft] = useState(session.title);
