@@ -844,10 +844,26 @@ async function isGitRepo(repoPath: string): Promise<boolean> {
 	}
 }
 
+async function resolveDefaultBranch(repoPath: string): Promise<string> {
+	try {
+		const ref = await gitOutput(repoPath, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+		if (ref) return ref.replace(/^origin\//, "");
+	} catch {
+		// Fall back to the checked-out branch when origin/HEAD is unavailable.
+	}
+	try {
+		const branch = await gitOutput(repoPath, ["branch", "--show-current"]);
+		if (branch) return branch;
+	} catch {
+		// Detached or unreadable HEAD is represented below.
+	}
+	return "HEAD";
+}
+
 async function scanGitRepo(repoPath: string, rootPath: string): Promise<GitRepoScanResult | null> {
 	if (!(await isGitRepo(repoPath))) return null;
 	const [branchResult, remoteResult] = await Promise.allSettled([
-		gitOutput(repoPath, ["branch", "--show-current"]),
+		resolveDefaultBranch(repoPath),
 		gitOutput(repoPath, ["remote", "get-url", "origin"]),
 	]);
 	const relativePath = repoPath === rootPath ? "." : path.relative(rootPath, repoPath);

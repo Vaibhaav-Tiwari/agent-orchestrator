@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ArrowLeft, CheckCircle2, Folder, FolderPlus, GitBranch, Package, RefreshCw, X, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Folder, FolderPlus, Package, RefreshCw, X, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type React from "react";
 import { aoBridge } from "../lib/bridge";
@@ -37,9 +37,10 @@ function ImportCard({ active = false, children, onClick, "aria-label": ariaLabel
 			aria-label={ariaLabel}
 			onClick={onClick}
 			className={cn(
-				"flex min-h-[184px] flex-col rounded-lg border border-border bg-background/70 p-4 text-left transition-colors",
-				"hover:border-border-strong hover:bg-surface",
-				active && "border-accent-dim bg-accent-weak/20",
+				"group flex min-h-[184px] cursor-pointer flex-col rounded-lg border border-border bg-background/70 p-4 text-left transition",
+				"hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface hover:shadow-sm",
+				"active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70",
+				active && "border-accent-dim bg-accent-weak/20 ring-1 ring-accent/40",
 			)}
 		>
 			{children}
@@ -156,49 +157,56 @@ export function ImportProjectDialog({ error, isImporting, onOpenChange, onSubmit
 									</button>
 								</Dialog.Close>
 							</div>
-							<div className="grid gap-3 p-5 sm:grid-cols-2">
-								<ImportCard aria-label="Workspace" onClick={() => selectMode("workspace")}>
-									<div className="mb-5 rounded-md border border-border bg-surface p-3">
-										<div className="flex items-center gap-2 text-[12px] text-muted-foreground">
-											<Folder className="size-4 text-accent" aria-hidden="true" />
-											<span className="font-medium text-foreground">workspace</span>
+							<div className="grid min-h-[330px] place-items-center px-5 py-8">
+								<div className="grid w-full max-w-[620px] gap-3 sm:grid-cols-2">
+									<ImportCard aria-label="Workspace" onClick={() => selectMode("workspace")}>
+										<div className="mb-5 grid min-h-[118px] place-items-center rounded-md border border-border bg-surface px-3 py-3 transition-colors group-hover:border-border-strong">
+											<div className="w-[min(100%,206px)]">
+												<div className="mx-auto flex w-fit items-center gap-2 text-[12px] text-muted-foreground">
+													<Folder className="size-4 text-accent" aria-hidden="true" />
+													<span className="font-medium text-foreground">workspace</span>
+												</div>
+												<div className="mt-2 grid gap-1.5">
+													{["web-app", "api-server", "shared-libs"].map((name) => (
+														<span
+															key={name}
+															className="flex h-8 items-center rounded-md border border-border bg-background px-3 font-mono text-[11px] text-muted-foreground"
+														>
+															<span className="mr-2 size-1.5 rounded-full bg-success" aria-hidden="true" />
+															{name}
+														</span>
+													))}
+												</div>
+											</div>
 										</div>
-										<div className="mt-3 grid gap-1.5 pl-5">
-											{["web-app", "api-server", "shared-libs"].map((name) => (
-												<span
-													key={name}
-													className="rounded border border-border bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground"
-												>
-													{name}
-												</span>
-											))}
+										<div className="mt-auto">
+											<div className="text-[14px] font-semibold text-foreground">Workspace</div>
+											<p className="mt-1 text-[12px] leading-5 text-muted-foreground">
+												Several Git repos that live under one parent folder
+											</p>
+											<div className="mt-3 font-mono text-[10px] uppercase tracking-[0.08em] text-passive">
+												• Multiple repositories
+											</div>
 										</div>
-									</div>
-									<div className="mt-auto">
-										<div className="text-[14px] font-semibold text-foreground">Workspace</div>
-										<p className="mt-1 text-[12px] leading-5 text-muted-foreground">
-											Several Git repos that live under one parent folder
-										</p>
-										<div className="mt-3 font-mono text-[10px] uppercase tracking-[0.08em] text-passive">
-											• Multiple repositories
+									</ImportCard>
+									<ImportCard aria-label="Project" onClick={() => selectMode("project")}>
+										<div className="mb-5 grid min-h-[118px] place-items-center rounded-md border border-border bg-surface px-3 py-3 transition-colors group-hover:border-border-strong">
+											<div className="flex h-11 w-[min(100%,160px)] items-center justify-center gap-2 rounded-md border border-border bg-background px-3 font-mono text-[11px] text-muted-foreground">
+												<span className="size-1.5 rounded-full bg-success" aria-hidden="true" />
+												<span className="font-medium text-foreground">web-app</span>
+												<span aria-hidden="true">·</span>
+												<span>main</span>
+											</div>
 										</div>
-									</div>
-								</ImportCard>
-								<ImportCard aria-label="Project" onClick={() => selectMode("project")}>
-									<div className="mb-5 rounded-md border border-border bg-surface p-3">
-										<div className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground">
-											<GitBranch className="size-3.5 text-accent" aria-hidden="true" />
-											web-app · main
+										<div className="mt-auto">
+											<div className="text-[14px] font-semibold text-foreground">Project</div>
+											<p className="mt-1 text-[12px] leading-5 text-muted-foreground">A single Git repository</p>
+											<div className="mt-3 font-mono text-[10px] uppercase tracking-[0.08em] text-passive">
+												• One repository
+											</div>
 										</div>
-									</div>
-									<div className="mt-auto">
-										<div className="text-[14px] font-semibold text-foreground">Project</div>
-										<p className="mt-1 text-[12px] leading-5 text-muted-foreground">A single Git repository</p>
-										<div className="mt-3 font-mono text-[10px] uppercase tracking-[0.08em] text-passive">
-											• One repository
-										</div>
-									</div>
-								</ImportCard>
+									</ImportCard>
+								</div>
 							</div>
 						</div>
 					) : (
@@ -286,7 +294,9 @@ export function ImportProjectDialog({ error, isImporting, onOpenChange, onSubmit
 															<div className="mt-0.5 truncate text-[11px] text-passive">{displayPath(repo.path)}</div>
 														</div>
 														<div className="max-w-[220px] shrink-0 truncate text-right font-mono text-[11px] text-muted-foreground">
-															{repo.hasRemote ? `${repo.branch} ${remoteHost(repo.remote)}` : "No remote configured"}
+															{repo.hasRemote
+																? `default ${repo.branch} · ${remoteHost(repo.remote)}`
+																: "No remote configured"}
 														</div>
 													</div>
 												))}

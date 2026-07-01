@@ -165,6 +165,7 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: "Project" }));
 		await user.click(screen.getByRole("button", { name: /Choose a project folder/ }));
 		expect((await screen.findAllByText("/repo/new-project")).length).toBeGreaterThan(0);
+		expect(screen.getByText("default main · github.com")).toBeInTheDocument();
 		await chooseOption(screen.getByRole("combobox", { name: "Worker agent" }), "codex");
 		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "claude-code");
 		await user.click(screen.getByRole("button", { name: "Import project" }));
