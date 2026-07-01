@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Agent Orchestrator",
+    "slug": "agent-orchestrator-mobile",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0a0b0d"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
