@@ -5,6 +5,7 @@ import { Plus } from "lucide-react";
 import { type AttentionZone, type WorkspaceSession, attentionZone, workerSessions } from "../types/workspace";
 import { useSessionScmSummary, type SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { useNewSessionEntrances } from "../hooks/useNewSessionEntrances";
 import { DashboardSubhead } from "./DashboardSubhead";
 import { OrchestratorIcon } from "./icons";
 import { NewTaskDialog } from "./NewTaskDialog";
@@ -71,6 +72,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 	const all = workspaceQuery.data ?? [];
 	const workspaces = projectId ? all.filter((w) => w.id === projectId) : all;
 	const sessions = workspaces.flatMap((w) => workerSessions(w.sessions));
+	const newSessionIds = useNewSessionEntrances(workspaceQuery.data ? sessions : undefined);
 	const orchestrator = projectId
 		? workspaces[0]?.sessions.find((session) => session.kind === "orchestrator" && session.status !== "terminated")
 		: undefined;
@@ -115,13 +117,9 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 		}
 	};
 
-	const handleTaskCreated = async (sessionId: string) => {
+	const handleTaskCreated = async () => {
 		if (!projectId) return;
 		await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-		void navigate({
-			to: "/projects/$projectId/sessions/$sessionId",
-			params: { projectId, sessionId },
-		});
 	};
 
 	const actions = projectId ? (
@@ -162,7 +160,13 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 				) : (
 					<div className="grid h-full grid-cols-4 gap-2">
 						{COLUMNS.map((col) => (
-							<ZoneColumn key={col.level} col={col} sessions={byZone.get(col.level) ?? []} onOpen={openSession} />
+							<ZoneColumn
+								key={col.level}
+								col={col}
+								newSessionIds={newSessionIds}
+								sessions={byZone.get(col.level) ?? []}
+								onOpen={openSession}
+							/>
 						))}
 					</div>
 				)}
@@ -215,7 +219,7 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 			<NewTaskDialog
 				open={isNewTaskOpen}
 				projectId={projectId}
-				onCreated={(sessionId) => void handleTaskCreated(sessionId)}
+				onCreated={() => void handleTaskCreated()}
 				onOpenChange={setIsNewTaskOpen}
 			/>
 		</div>
@@ -224,16 +228,19 @@ export function SessionsBoard({ projectId }: SessionsBoardProps) {
 
 function ZoneColumn({
 	col,
+	newSessionIds,
 	sessions,
 	onOpen,
 }: {
 	col: Column;
+	newSessionIds: ReadonlySet<string>;
 	sessions: WorkspaceSession[];
 	onOpen: (s: WorkspaceSession) => void;
 }) {
+	const hasNewSession = sessions.some((session) => newSessionIds.has(session.id));
 	return (
 		<section
-			className="flex min-w-0 flex-col overflow-hidden rounded-[13px]"
+			className={cn("flex min-w-0 flex-col overflow-hidden rounded-[13px]", hasNewSession && "session-zone-enter")}
 			style={{ background: `linear-gradient(180deg, ${col.glow}, transparent 130px), var(--kanban-column-bg)` }}
 		>
 			<div className="flex shrink-0 items-center gap-[9px] px-[15px] pb-[11px] pt-[14px]">
@@ -250,7 +257,12 @@ function ZoneColumn({
 			<div className="min-h-0 flex-1 overflow-y-auto px-[11px] pb-3">
 				<div className="flex flex-col gap-2.5">
 					{sessions.map((session) => (
-						<SessionCard key={session.id} session={session} onOpen={() => onOpen(session)} />
+						<SessionCard
+							key={session.id}
+							isNewSession={newSessionIds.has(session.id)}
+							session={session}
+							onOpen={() => onOpen(session)}
+						/>
 					))}
 				</div>
 			</div>
@@ -258,14 +270,18 @@ function ZoneColumn({
 	);
 }
 
-function SessionCard({ session, onOpen }: { session: WorkspaceSession; onOpen: () => void }) {
+function SessionCard({ isNewSession, session, onOpen }: { isNewSession: boolean; session: WorkspaceSession; onOpen: () => void }) {
 	const badge = sessionBadge(session);
 	const branch = session.branch || "";
 	const showBranch = branch !== "" && !sameLabel(branch, session.title) && !sameLabel(branch, session.id);
 	const prSummaries = sessionPRDisplaySummaries(session, useSessionScmSummary(session.id).data);
 	return (
 		<button
-			className="w-full rounded-[7px] border border-border bg-surface text-left transition-colors hover:border-border-strong"
+			className={cn(
+				"w-full rounded-[7px] border border-border bg-surface text-left transition-colors hover:border-border-strong",
+				isNewSession && "session-card-enter",
+			)}
+			data-new-session={isNewSession ? "true" : undefined}
 			onClick={onOpen}
 			type="button"
 		>

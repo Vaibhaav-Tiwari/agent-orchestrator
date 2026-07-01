@@ -67,5 +67,13 @@ builder-debug.yml
 # playwright artifacts
 frontend/test-results/
 
+# Mobile local state
+mobile/.expo/
+packages/mobile/expo-env.d.ts
+
 # built daemon binary copied into the frontend bundle dir
 frontend/daemon/
+
+# Local scratch workspaces/assets
+/ReverbCode*/
+/BLOG IMAGES/

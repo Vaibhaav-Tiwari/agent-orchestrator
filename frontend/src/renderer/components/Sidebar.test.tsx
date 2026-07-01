@@ -4,7 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./Sidebar";
-import type { WorkspaceSummary } from "../types/workspace";
+import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 
 const { navigateMock, mockParams } = vi.hoisted(() => ({
 	navigateMock: vi.fn(),
@@ -27,6 +27,19 @@ const workspace: WorkspaceSummary = {
 	name: "Project One",
 	path: "/repo/project-one",
 	sessions: [],
+};
+
+const spawnedSession: WorkspaceSession = {
+	id: "sess-1",
+	workspaceId: "proj-1",
+	workspaceName: "Project One",
+	title: "write tests",
+	provider: "codex",
+	kind: "worker",
+	branch: "feat/write-tests",
+	status: "working",
+	updatedAt: "2026-06-10T16:25:04Z",
+	prs: [],
 };
 
 type CreateProjectHandler = (input: { path: string; workerAgent: string; orchestratorAgent: string }) => Promise<void>;
@@ -55,6 +68,24 @@ function renderSidebar({
 		</QueryClientProvider>,
 	);
 	return onRemoveProject;
+}
+
+function renderSidebarWithWorkspaces(workspaces: WorkspaceSummary[]) {
+	const queryClient = new QueryClient({
+		defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+	});
+	return render(
+		<QueryClientProvider client={queryClient}>
+			<SidebarProvider>
+				<Sidebar
+					daemonStatus={{ state: "running" }}
+					onCreateProject={vi.fn().mockResolvedValue(undefined) as CreateProjectHandler}
+					onRemoveProject={vi.fn().mockResolvedValue(undefined) as RemoveProjectHandler}
+					workspaces={workspaces}
+				/>
+			</SidebarProvider>
+		</QueryClientProvider>,
+	);
 }
 
 async function chooseOption(trigger: HTMLElement, optionName: string) {
@@ -169,5 +200,24 @@ describe("Sidebar", () => {
 		if (!projectRow) throw new Error("Project row button not found");
 		// Padding is always reserved for the action cluster (not hover-gated)
 		expect(projectRow).toHaveClass("pr-[84px]");
+	});
+
+	it("marks worker sessions added after the first sidebar render as newly spawned", () => {
+		const view = renderSidebarWithWorkspaces([workspace]);
+
+		view.rerender(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
+				<SidebarProvider>
+					<Sidebar
+						daemonStatus={{ state: "running" }}
+						onCreateProject={vi.fn().mockResolvedValue(undefined) as CreateProjectHandler}
+						onRemoveProject={vi.fn().mockResolvedValue(undefined) as RemoveProjectHandler}
+						workspaces={[{ ...workspace, sessions: [spawnedSession] }]}
+					/>
+				</SidebarProvider>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByLabelText("Open write tests")).toHaveAttribute("data-new-session", "true");
 	});
 });

@@ -371,6 +371,156 @@ select {
 	}
 }
 
+.session-zone-enter {
+	animation: session-zone-bloom 3800ms ease-out both;
+}
+
+.session-card-enter,
+.sidebar-session-enter {
+	position: relative;
+	overflow: hidden;
+}
+
+.session-card-enter {
+	animation:
+		session-card-enter 980ms cubic-bezier(0.16, 1, 0.3, 1) both,
+		session-card-glow 4200ms ease-out both;
+}
+
+.session-card-enter::after,
+.sidebar-session-enter::after {
+	content: "";
+	position: absolute;
+	inset: -1px;
+	border-radius: inherit;
+	pointer-events: none;
+	background: linear-gradient(
+		110deg,
+		transparent 0%,
+		color-mix(in srgb, var(--accent) 14%, transparent) 34%,
+		color-mix(in srgb, var(--accent) 34%, transparent) 48%,
+		transparent 74%
+	);
+	transform: translateX(-115%);
+	animation: session-sheen 1550ms 160ms ease-out both;
+}
+
+.sidebar-session-enter {
+	animation:
+		sidebar-session-enter 900ms cubic-bezier(0.16, 1, 0.3, 1) both,
+		sidebar-session-glow 3800ms ease-out both;
+}
+
+@keyframes session-zone-bloom {
+	0% {
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 0%, transparent);
+	}
+	18% {
+		box-shadow:
+			inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+			inset 0 22px 90px color-mix(in srgb, var(--accent) 18%, transparent);
+	}
+	58% {
+		box-shadow:
+			inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent),
+			inset 0 22px 80px color-mix(in srgb, var(--accent) 10%, transparent);
+	}
+	100% {
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 0%, transparent);
+	}
+}
+
+@keyframes session-card-enter {
+	from {
+		opacity: 0;
+		transform: translateY(18px) scale(0.965);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+}
+
+@keyframes session-card-glow {
+	0% {
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 0%, transparent);
+	}
+	18% {
+		box-shadow:
+			0 0 0 1px color-mix(in srgb, var(--accent) 46%, transparent),
+			0 18px 42px color-mix(in srgb, var(--accent) 26%, transparent),
+			0 0 0 5px color-mix(in srgb, var(--accent) 10%, transparent);
+	}
+	58% {
+		box-shadow:
+			0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
+			0 14px 34px color-mix(in srgb, var(--accent) 12%, transparent);
+	}
+	100% {
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 0%, transparent);
+	}
+}
+
+@keyframes sidebar-session-enter {
+	from {
+		opacity: 0;
+		transform: translateX(-10px);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(0);
+	}
+}
+
+@keyframes sidebar-session-glow {
+	0% {
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 0%, transparent);
+	}
+	20% {
+		box-shadow:
+			inset 0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent),
+			inset 24px 0 54px color-mix(in srgb, var(--accent) 18%, transparent);
+	}
+	60% {
+		box-shadow:
+			inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent),
+			inset 18px 0 42px color-mix(in srgb, var(--accent) 8%, transparent);
+	}
+	100% {
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 0%, transparent);
+	}
+}
+
+@keyframes session-sheen {
+	0% {
+		opacity: 0;
+		transform: translateX(-115%);
+	}
+	18%,
+	58% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
+		transform: translateX(115%);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.session-zone-enter,
+	.session-card-enter,
+	.sidebar-session-enter,
+	.session-card-enter::after,
+	.sidebar-session-enter::after {
+		animation: none;
+	}
+
+	.session-card-enter::after,
+	.sidebar-session-enter::after {
+		display: none;
+	}
+}
+
 /* ── Resizable panel handles (sidebar + inspector) ──────────────────────── */
 .resize-handle {
 	position: absolute;

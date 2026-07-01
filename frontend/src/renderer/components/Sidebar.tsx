@@ -23,6 +23,7 @@ import {
 } from "../types/workspace";
 import { aoBridge } from "../lib/bridge";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { useNewSessionEntrances } from "../hooks/useNewSessionEntrances";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { useEventsConnection } from "../hooks/useEventsConnection";
 import { useResizable } from "../hooks/useResizable";
@@ -402,6 +403,7 @@ function ProjectItem({
 	// Live workers only: merged/terminated sessions leave the sidebar and stay
 	// reachable through the board's Done / Terminated bar (SessionsBoard).
 	const sessions = workerSessions(workspace.sessions).filter(sessionIsActive);
+	const newSessionIds = useNewSessionEntrances(sessions);
 	// The project's live orchestrator (if any) backs the hover Orchestrator
 	// button: navigate to it when present, otherwise spawn one first.
 	const orchestrator = workspace.sessions.find((s) => isOrchestratorSession(s) && sessionIsActive(s));
@@ -564,17 +566,20 @@ function ProjectItem({
 				<SidebarMenuSub className="mx-0 ml-[18px] translate-x-0 gap-0 border-l-0 px-0 py-1 pl-2.5">
 					{sessions.map((session) => {
 						const active = selection.activeSessionId === session.id;
+						const isNewSession = newSessionIds.has(session.id);
 						return (
 							<SidebarMenuSubItem key={session.id}>
 								<button
 									aria-current={active ? "page" : undefined}
 									aria-label={`Open ${session.title}`}
 									className={cn(
-										"relative flex h-auto w-full items-center gap-[9px] rounded-[4px] py-[5px] pl-2.5 pr-1.5 text-left outline-hidden transition-[color]",
+										"relative flex h-auto w-full items-center gap-[9px] overflow-hidden rounded-[4px] py-[5px] pl-2.5 pr-1.5 text-left outline-hidden transition-[color]",
 										"before:absolute before:top-1.5 before:bottom-1.5 before:left-0 before:w-px before:rounded-full before:bg-transparent",
 										"hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
 										active && "text-foreground before:bg-accent",
+										isNewSession && "sidebar-session-enter",
 									)}
+									data-new-session={isNewSession ? "true" : undefined}
 									onClick={() => selection.goSession(workspace.id, session.id)}
 									type="button"
 								>
