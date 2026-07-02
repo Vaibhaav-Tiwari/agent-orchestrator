@@ -1,9 +1,11 @@
 import { Feather } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
 	ActivityIndicator,
 	KeyboardAvoidingView,
 	Platform,
+	Pressable,
 	ScrollView,
 	StyleSheet,
 	Switch,
@@ -20,7 +22,14 @@ import { Button, ConnectionPill, ScreenHeader } from "../../lib/ui";
 
 export default function SettingsScreen() {
 	const insets = useSafeAreaInsets();
-	const { reloadConfig, projects, connection } = useApp();
+	const router = useRouter();
+	const { reloadConfig, projects, connection, setActiveProject } = useApp();
+
+	// Tapping a project scopes the Kanban board to it and jumps to that tab.
+	const openProject = (id: string) => {
+		setActiveProject(id);
+		router.navigate("/");
+	};
 	const [cfg, setCfg] = useState<ServerConfig>(DEFAULT_CONFIG);
 	const [loaded, setLoaded] = useState(false);
 	const [testing, setTesting] = useState(false);
@@ -143,11 +152,16 @@ export default function SettingsScreen() {
 					<Text style={styles.intro}>No projects found. Add a project from the AO dashboard.</Text>
 				) : (
 					projects.map((p) => (
-						<View key={p.id} style={styles.projRow}>
+						<Pressable
+							key={p.id}
+							onPress={() => openProject(p.id)}
+							style={({ pressed }) => [styles.projRow, pressed && styles.projRowPressed]}
+						>
 							<Feather name="folder" size={16} color={theme.textTertiary} />
 							<Text style={styles.projName}>{p.name}</Text>
 							{p.sessionPrefix ? <Text style={styles.projPrefix}>{p.sessionPrefix}</Text> : null}
-						</View>
+							<Feather name="chevron-right" size={16} color={theme.textTertiary} />
+						</Pressable>
 					))
 				)}
 			</ScrollView>
@@ -230,6 +244,7 @@ const styles = StyleSheet.create({
 		borderColor: theme.borderSubtle,
 		marginBottom: 8,
 	},
+	projRowPressed: { backgroundColor: theme.bgElevatedHover, borderColor: theme.borderDefault },
 	projName: { color: theme.textPrimary, fontSize: 14, fontWeight: "600", flex: 1 },
 	projPrefix: { color: theme.textTertiary, fontSize: 12, fontFamily: theme.fontMono },
 });
