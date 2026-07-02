@@ -4,9 +4,10 @@ import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Keyboard, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { killSession, sendMessage } from "../../lib/api";
+import { isTerminalStatus, killSession, sendMessage } from "../../lib/api";
 import { isConfigured, loadConfig, type ServerConfig } from "../../lib/config";
 import { MuxClient, type MuxStatus } from "../../lib/mux";
+import { useApp } from "../../lib/store";
 import { theme } from "../../lib/theme";
 
 const FONT_SIZE = 12;
@@ -231,6 +232,14 @@ export default function TerminalScreen() {
 	const [compose, setCompose] = useState(false); // high-level "send message" bar
 	const [msg, setMsg] = useState("");
 	const [sending, setSending] = useState(false);
+	// A terminated session has no live PTY (the mux answers "Session not found").
+	// Track that + the known status so we can offer Restore instead of a dead term.
+	const [notFound, setNotFound] = useState(false);
+	const [restoring, setRestoring] = useState(false);
+
+	const { sessions, orchestrators, restore } = useApp();
+	const known = sessions.find((s) => s.id === id) ?? orchestrators.find((o) => o.id === id) ?? null;
+	const dead = notFound || (known ? isTerminalStatus(known.status) : false);
 
 	// iOS doesn't resize the layout when the keyboard opens, so the key bar would
 	// hide behind it — reserve kbHeight so the bar rides above the keyboard.
@@ -287,10 +296,17 @@ export default function TerminalScreen() {
 					if (tid === id) xtermRef.current?.write(bytes);
 				},
 				onTerminalExited: (tid, code) => {
-					if (tid === id) setBanner(`Session exited (code ${code})`);
+					if (tid === id) {
+						setBanner(`Session exited (code ${code})`);
+						setNotFound(true);
+					}
 				},
 				onTerminalError: (tid, msg) => {
-					if (tid === id) setBanner(msg);
+					if (tid !== id) return;
+					// A missing PTY means the session is terminated — offer Restore
+					// instead of surfacing it as a raw error banner.
+					if (/not found/i.test(msg)) setNotFound(true);
+					else setBanner(msg);
 				},
 			});
 			muxRef.current = mux;
@@ -421,6 +437,30 @@ export default function TerminalScreen() {
 		]);
 	}, [cfg, id, leave]);
 
+	// Restore a terminated session: the daemon re-attaches its worktree agent and
+	// its PTY comes back, so we re-open the terminal once restore succeeds.
+	const onRestore = useCallback(async () => {
+		setRestoring(true);
+		try {
+			await restore(id);
+			setBanner(null);
+			setNotFound(false);
+			openedRef.current = false;
+			// Give the daemon a moment to bring the PTY up, then re-attach.
+			setTimeout(() => {
+				if (openedRef.current) return;
+				openedRef.current = true;
+				muxRef.current?.openTerminal(id, projectId);
+				const d = lastDimsRef.current;
+				if (d) muxRef.current?.resize(id, d.cols, d.rows, projectId);
+			}, 1200);
+		} catch (e) {
+			setBanner(`Restore failed: ${e instanceof Error ? e.message : String(e)}`);
+		} finally {
+			setRestoring(false);
+		}
+	}, [restore, id, projectId]);
+
 	const xtermOptions = useMemo(
 		() => ({
 			fontSize: FONT_SIZE,
@@ -483,19 +523,31 @@ export default function TerminalScreen() {
 			<View style={styles.statusBar}>
 				<View style={[styles.statusDot, { backgroundColor: statusColors[status] }]} />
 				<Text style={styles.statusText}>{statusLabel[status]}</Text>
-				{size && (
+				{size && !dead && (
 					<Text style={styles.dims}>
 						{size.cols}×{size.rows}
 					</Text>
 				)}
-				<Pressable
-					hitSlop={8}
-					onPress={confirmKill}
-					style={({ pressed }) => [styles.killBtn, pressed && { opacity: 0.7 }]}
-				>
-					<Feather name="x" size={12} color={theme.red} />
-					<Text style={styles.killText}>Kill</Text>
-				</Pressable>
+				{dead ? (
+					<Pressable
+						hitSlop={8}
+						onPress={onRestore}
+						disabled={restoring}
+						style={({ pressed }) => [styles.restoreBtn, (pressed || restoring) && { opacity: 0.7 }]}
+					>
+						<Feather name="rotate-ccw" size={12} color={theme.blue} />
+						<Text style={styles.restoreText}>{restoring ? "Restoring…" : "Restore"}</Text>
+					</Pressable>
+				) : (
+					<Pressable
+						hitSlop={8}
+						onPress={confirmKill}
+						style={({ pressed }) => [styles.killBtn, pressed && { opacity: 0.7 }]}
+					>
+						<Feather name="x" size={12} color={theme.red} />
+						<Text style={styles.killText}>Kill</Text>
+					</Pressable>
+				)}
 			</View>
 
 			{banner && (
@@ -515,6 +567,23 @@ export default function TerminalScreen() {
 					onData={onData}
 					style={{ flex: 1, backgroundColor: theme.bgBase }}
 				/>
+				{dead && (
+					<View style={styles.deadOverlay}>
+						<View style={styles.deadIcon}>
+							<Feather name="power" size={24} color={theme.textTertiary} />
+						</View>
+						<Text style={styles.deadTitle}>Session terminated</Text>
+						<Text style={styles.deadMsg}>This session has no live terminal. Restore it to bring the agent back.</Text>
+						<Pressable
+							onPress={onRestore}
+							disabled={restoring}
+							style={({ pressed }) => [styles.restoreCta, (pressed || restoring) && { opacity: 0.8 }]}
+						>
+							<Feather name="rotate-ccw" size={16} color="#06101f" />
+							<Text style={styles.restoreCtaText}>{restoring ? "Restoring…" : "Restore session"}</Text>
+						</Pressable>
+					</View>
+				)}
 			</View>
 
 			{compose && (
@@ -632,6 +701,49 @@ const styles = StyleSheet.create({
 		marginLeft: 12,
 	},
 	killText: { color: theme.red, fontWeight: "700", fontSize: 12 },
+	restoreBtn: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 4,
+		backgroundColor: theme.tintBlue,
+		borderRadius: 12,
+		paddingHorizontal: 11,
+		paddingVertical: 4,
+		marginLeft: 12,
+	},
+	restoreText: { color: theme.blue, fontWeight: "700", fontSize: 12 },
+	deadOverlay: {
+		...StyleSheet.absoluteFillObject,
+		alignItems: "center",
+		justifyContent: "center",
+		padding: 32,
+		gap: 10,
+		backgroundColor: theme.bgBase,
+	},
+	deadIcon: {
+		width: 64,
+		height: 64,
+		borderRadius: 18,
+		backgroundColor: theme.bgElevated,
+		borderWidth: 1,
+		borderColor: theme.borderSubtle,
+		alignItems: "center",
+		justifyContent: "center",
+		marginBottom: 6,
+	},
+	deadTitle: { color: theme.textPrimary, fontSize: 17, fontWeight: "700", textAlign: "center" },
+	deadMsg: { color: theme.textSecondary, fontSize: 13, lineHeight: 20, textAlign: "center", maxWidth: 300 },
+	restoreCta: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 8,
+		backgroundColor: theme.blue,
+		borderRadius: 10,
+		paddingVertical: 12,
+		paddingHorizontal: 20,
+		marginTop: 10,
+	},
+	restoreCtaText: { color: "#06101f", fontSize: 15, fontWeight: "700" },
 	composer: {
 		flexDirection: "row",
 		alignItems: "flex-end",
