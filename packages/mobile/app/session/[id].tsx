@@ -393,12 +393,20 @@ export default function TerminalScreen() {
 		}
 	}, [msg, cfg, id]);
 
+	// Leaving the screen: go back when there's history, otherwise fall back to the
+	// board. Guards against "GO_BACK not handled" when this route was opened with
+	// no back-stack (e.g. a deep link straight into a session).
+	const leave = useCallback(() => {
+		if (router.canGoBack()) router.back();
+		else router.replace("/");
+	}, [router]);
+
 	const confirmKill = useCallback(() => {
 		const doKill = async () => {
 			try {
 				const config = cfg ?? (await loadConfig());
 				await killSession(config, id);
-				router.back();
+				leave();
 			} catch (e) {
 				setBanner(`Kill failed: ${e instanceof Error ? e.message : String(e)}`);
 			}
@@ -411,7 +419,7 @@ export default function TerminalScreen() {
 			{ text: "Cancel", style: "cancel" },
 			{ text: "Kill", style: "destructive", onPress: doKill },
 		]);
-	}, [cfg, id, router]);
+	}, [cfg, id, leave]);
 
 	const xtermOptions = useMemo(
 		() => ({
