@@ -5,15 +5,10 @@ import { useApp } from "../lib/store";
 import { theme } from "../lib/theme";
 import { Button, Pill } from "../lib/ui";
 
-// Common agent harnesses. The daemon needs one unless the project configures a
-// default worker.agent; claude-code is the safe default in this environment.
-const HARNESSES = ["claude-code", "codex", "cursor", "opencode", "aider", "amp", "copilot"];
-
 export default function SpawnModal() {
 	const router = useRouter();
 	const { projects, activeProjectId, spawn } = useApp();
 	const [projectId, setProjectId] = useState<string | null>(null);
-	const [harness, setHarness] = useState<string>("claude-code");
 	const [prompt, setPrompt] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -33,7 +28,7 @@ export default function SpawnModal() {
 		setBusy(true);
 		setError(null);
 		try {
-			await spawn(prompt.trim() || undefined, projectId, harness);
+			await spawn(prompt.trim() || undefined, projectId);
 			router.back();
 		} catch (e) {
 			setError(e instanceof Error ? e.message : "Failed to spawn agent.");
@@ -52,13 +47,6 @@ export default function SpawnModal() {
 				<View style={styles.projects}>
 					{projects.map((p) => (
 						<Pill key={p.id} label={p.name} active={projectId === p.id} onPress={() => setProjectId(p.id)} />
-					))}
-				</View>
-
-				<Text style={[styles.label, { marginTop: 20 }]}>AGENT</Text>
-				<View style={styles.projects}>
-					{HARNESSES.map((h) => (
-						<Pill key={h} label={h} active={harness === h} onPress={() => setHarness(h)} />
 					))}
 				</View>
 
