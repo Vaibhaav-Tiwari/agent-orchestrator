@@ -212,6 +212,14 @@ export default function TerminalScreen() {
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
 
+	// Leaving the screen: pop when there's history, otherwise go to the board.
+	// Guards against a missing/broken back button when this route was cold-started
+	// with no back-stack — e.g. a reload while on the terminal, or a deep link.
+	const leave = useCallback(() => {
+		if (router.canGoBack()) router.back();
+		else router.replace("/");
+	}, [router]);
+
 	const xtermRef = useRef<XtermWebViewHandle | null>(null);
 	const muxRef = useRef<MuxClient | null>(null);
 	const openedRef = useRef(false);
@@ -282,8 +290,17 @@ export default function TerminalScreen() {
 	useLayoutEffect(() => {
 		navigation.setOptions({
 			title: id.length > 22 ? `${id.slice(0, 20)}…` : id,
+			// Always render our own Back control so it works even when the app was
+			// cold-started directly on this route (reload/deep link) and the stack
+			// has no history for the default back button to use.
+			headerLeft: () => (
+				<Pressable onPress={leave} hitSlop={12} style={styles.headerBack}>
+					<Feather name="chevron-left" size={22} color={theme.blue} />
+					<Text style={styles.headerBackText}>Back</Text>
+				</Pressable>
+			),
 		});
-	}, [navigation, id]);
+	}, [navigation, id, leave]);
 
 	// Load config, then connect the mux socket.
 	useEffect(() => {
@@ -412,14 +429,6 @@ export default function TerminalScreen() {
 			setSending(false);
 		}
 	}, [msg, cfg, id]);
-
-	// Leaving the screen: go back when there's history, otherwise fall back to the
-	// board. Guards against "GO_BACK not handled" when this route was opened with
-	// no back-stack (e.g. a deep link straight into a session).
-	const leave = useCallback(() => {
-		if (router.canGoBack()) router.back();
-		else router.replace("/");
-	}, [router]);
 
 	const confirmKill = useCallback(() => {
 		const doKill = async () => {
@@ -727,6 +736,8 @@ const styles = StyleSheet.create({
 		marginLeft: 12,
 	},
 	killText: { color: theme.red, fontWeight: "700", fontSize: 12 },
+	headerBack: { flexDirection: "row", alignItems: "center", paddingRight: 8 },
+	headerBackText: { color: theme.blue, fontSize: 17, marginLeft: 2 },
 	restoreBtn: {
 		flexDirection: "row",
 		alignItems: "center",
