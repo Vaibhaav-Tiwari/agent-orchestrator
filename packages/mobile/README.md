@@ -1,21 +1,36 @@
-# Agent Orchestrator Mobile
+# Agent Orchestrator — Mobile
 
-Expo mobile supervisor for Agent Orchestrator.
+Expo (expo-router) mobile supervisor for Agent Orchestrator. Four tabs — Kanban,
+PRs, Orchestrator, Settings — plus a spawn flow and a session screen. It talks to
+your AO server's HTTP API over your LAN or Tailscale.
 
 ## Run
 
 ```bash
 cd packages/mobile
-npm install
-npm run start
+npm install        # from the repo root the first time: `npm install`
+npm start          # then press i (iOS), a (Android), or scan the QR in Expo Go
 ```
 
-## Daemon Connection
+## Connect
 
-The app connects to a daemon URL configured in Settings. A physical phone cannot use the desktop daemon's `127.0.0.1`, so use a reachable LAN address such as:
+Open **Settings** and set:
 
-```text
-http://192.168.1.20:34115
+- **Host** — your PC's Tailscale name / `100.x` address, or its LAN IP on the same Wi-Fi.
+- **API Port** — the AO server HTTP API port.
+- **Terminal Port** — reserved for the live terminal (a follow-up); safe to leave default.
+- **Use TLS** — on only if AO is served over HTTPS (e.g. a Tailscale funnel).
+
+Tap **Test connection**, then **Save**.
+
+## Status
+
+The live in-app terminal is not implemented yet — the session screen shows session
+status and a Kill action with a "coming soon" placeholder. Everything else
+(board, PRs, orchestrators, spawn, settings) is live against the AO API.
+
+## Verify
+
+```bash
+npm run typecheck   # tsc --noEmit
 ```
-
-Keep the daemon loopback-only unless a separate, intentional remote-access mode is added to the backend.
