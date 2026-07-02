@@ -232,6 +232,10 @@ export default function TerminalScreen() {
 	const [compose, setCompose] = useState(false); // high-level "send message" bar
 	const [msg, setMsg] = useState("");
 	const [sending, setSending] = useState(false);
+	// Terminal font size. Smaller font = more rows/cols, which is the only way to
+	// see more of a full-screen TUI (alt-screen apps have no scrollback). Changing
+	// it remounts the xterm; the PTY persists and re-attaches at the denser grid.
+	const [fontSize, setFontSize] = useState(FONT_SIZE);
 	// A terminated session has no live PTY (the mux answers "Session not found").
 	// Track that + the known status so we can offer Restore instead of a dead term.
 	const [notFound, setNotFound] = useState(false);
@@ -463,7 +467,7 @@ export default function TerminalScreen() {
 
 	const xtermOptions = useMemo(
 		() => ({
-			fontSize: FONT_SIZE,
+			fontSize,
 			cursorBlink: true,
 			scrollback: 5000,
 			// Move more rows per swipe so touch scrolling feels responsive.
@@ -475,8 +479,16 @@ export default function TerminalScreen() {
 				cursor: theme.orange,
 			},
 		}),
-		[],
+		[fontSize],
 	);
+
+	// Zoom re-mounts the terminal at a new font size (see fontSize note above).
+	// Reset open/size so the fresh mount re-attaches the PTY and re-reports dims.
+	const zoom = useCallback((delta: number) => {
+		setFontSize((f) => Math.min(20, Math.max(7, f + delta)));
+		openedRef.current = false;
+		setSize(null);
+	}, []);
 
 	const webViewOptions = useMemo(
 		() => ({
@@ -558,6 +570,7 @@ export default function TerminalScreen() {
 
 			<View style={styles.termWrap}>
 				<XtermJsWebView
+					key={`term-${fontSize}`}
 					ref={xtermRef}
 					autoFit={false}
 					xtermOptions={xtermOptions}
@@ -619,6 +632,19 @@ export default function TerminalScreen() {
 						<Text style={styles.keyText}>{k.label}</Text>
 					</Pressable>
 				))}
+				{/* Zoom the terminal font: smaller = more rows/cols (see more of a TUI). */}
+				<Pressable
+					style={({ pressed }) => [styles.key, pressed && styles.keyPressed]}
+					onPress={() => zoom(-1)}
+				>
+					<Feather name="zoom-out" size={15} color={theme.textPrimary} />
+				</Pressable>
+				<Pressable
+					style={({ pressed }) => [styles.key, pressed && styles.keyPressed]}
+					onPress={() => zoom(1)}
+				>
+					<Feather name="zoom-in" size={15} color={theme.textPrimary} />
+				</Pressable>
 				{/* Compose a high-level message to the agent. */}
 				<Pressable
 					style={({ pressed }) => [styles.key, compose && styles.keyToggle, pressed && styles.keyPressed]}
