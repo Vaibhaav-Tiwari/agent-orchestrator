@@ -1,6 +1,6 @@
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { Alert, Linking, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Linking, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { DashboardPR, DashboardSession } from "../../lib/api";
 import { ProjectSwitcher } from "../../lib/ProjectSwitcher";
@@ -10,16 +10,13 @@ import { Button, Chip, ConnectionPill, EmptyState, Pill, ScreenHeader } from "..
 
 type Filter = "open" | "merged" | "all";
 
-const prKey = (pr: DashboardPR) => `${pr.owner ?? ""}/${pr.repo ?? ""}#${pr.number}`;
-
 export default function PRsScreen() {
 	const insets = useSafeAreaInsets();
 	const router = useRouter();
-	const { configured, connection, merge, refresh } = useApp();
+	const { configured, connection, refresh } = useApp();
 	const prs = usePRs();
 	const [filter, setFilter] = useState<Filter>("open");
 	const [refreshing, setRefreshing] = useState(false);
-	const [merging, setMerging] = useState<string | null>(null);
 
 	const filtered = useMemo(() => {
 		return prs.filter(({ pr }) => {
@@ -34,31 +31,6 @@ export default function PRsScreen() {
 		setRefreshing(true);
 		await refresh();
 		setRefreshing(false);
-	};
-
-	const onMerge = (pr: DashboardPR) => {
-		const blockers = pr.mergeability?.blockers ?? [];
-		Alert.alert(
-			`Merge #${pr.number}?`,
-			blockers.length ? `Blockers: ${blockers.join(", ")}` : `Squash-merge "${pr.title ?? pr.number}".`,
-			[
-				{ text: "Cancel", style: "cancel" },
-				{
-					text: "Merge",
-					style: "default",
-					onPress: async () => {
-						setMerging(prKey(pr));
-						try {
-							await merge(pr);
-						} catch (e) {
-							Alert.alert("Merge failed", e instanceof Error ? e.message : "Unknown error");
-						} finally {
-							setMerging(null);
-						}
-					},
-				},
-			],
-		);
 	};
 
 	if (!configured) {
@@ -109,8 +81,6 @@ export default function PRsScreen() {
 							key={`${pr.owner}/${pr.repo}#${pr.number}`}
 							pr={pr}
 							session={session}
-							merging={merging === prKey(pr)}
-							onMerge={() => onMerge(pr)}
 							onOpenSession={() =>
 								router.push({
 									pathname: "/session/[id]",
@@ -128,17 +98,12 @@ export default function PRsScreen() {
 function PRCard({
 	pr,
 	session,
-	merging,
-	onMerge,
 	onOpenSession,
 }: {
 	pr: DashboardPR;
 	session: DashboardSession;
-	merging: boolean;
-	onMerge: () => void;
 	onOpenSession: () => void;
 }) {
-	const mergeable = pr.mergeability?.mergeable && (pr.state ?? "open") === "open";
 	const ci = pr.ciStatus;
 	const review = pr.reviewDecision;
 
@@ -200,9 +165,6 @@ function PRCard({
 						onPress={() => Linking.openURL(pr.url!)}
 						style={styles.flexBtn}
 					/>
-				) : null}
-				{mergeable ? (
-					<Button title="Merge" icon="git-merge" loading={merging} onPress={onMerge} style={styles.flexBtn} />
 				) : null}
 			</View>
 		</View>
