@@ -71,7 +71,9 @@ export function Pill({
 }) {
 	return (
 		<Pressable onPress={onPress} style={[s.pill, active && s.pillActive, style]}>
-			<Text style={[s.pillText, active && s.pillTextActive, textStyle]}>{label}</Text>
+			<Text numberOfLines={1} style={[s.pillText, active && s.pillTextActive, textStyle]}>
+				{label}
+			</Text>
 		</Pressable>
 	);
 }
