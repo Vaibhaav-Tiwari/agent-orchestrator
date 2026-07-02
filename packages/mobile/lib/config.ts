@@ -12,7 +12,7 @@ export type ServerConfig = {
 
 export const DEFAULT_CONFIG: ServerConfig = {
 	host: "",
-	httpPort: "3000",
+	httpPort: "3001",
 	muxPort: "14801",
 	secure: false,
 };
