@@ -47,6 +47,9 @@ export type DashboardSession = {
 	pr?: DashboardPR | null;
 	prs?: DashboardPR[];
 	metadata?: Record<string, string>;
+	// Browser-preview target the daemon detected/served for this session (e.g. a
+	// dist/index.html entrypoint). Consumed by the in-app browser.
+	previewUrl?: string | null;
 };
 
 export type OrchestratorLink = {
@@ -81,6 +84,106 @@ export type SessionsResponse = {
 	stats: DashboardStats;
 };
 
+// ---- Wire types (this repo's Go daemon, /api/v1/*) --------------------------
+//
+// The app UI speaks AO's OG "DashboardSession" shape; this daemon speaks a
+// leaner read model. The maps below translate the daemon's SessionView/PR facts
+// into the shapes the screens expect, so the rest of the app is unchanged.
+
+const API = "/api/v1";
+
+type WirePR = {
+	url: string;
+	number: number;
+	state?: string; // draft | open | merged | closed
+	ci?: string; // unknown | pending | passing | failing
+	review?: string; // none | approved | changes_requested | review_required
+	mergeability?: string; // unknown | mergeable | conflicting | blocked | unstable
+	reviewComments?: boolean;
+};
+
+type WireSession = {
+	id: string;
+	projectId: string;
+	issueId?: string;
+	kind?: string; // worker | orchestrator
+	harness?: string;
+	displayName?: string;
+	activity?: unknown;
+	isTerminated?: boolean;
+	status?: string | null;
+	branch?: string;
+	createdAt?: string;
+	updatedAt?: string;
+	previewUrl?: string;
+	prs?: WirePR[];
+};
+
+function mapPR(pr: WirePR): DashboardPR {
+	const ci = pr.ci === "passing" || pr.ci === "failing" || pr.ci === "pending" ? pr.ci : "none";
+	const review =
+		pr.review === "approved"
+			? "approved"
+			: pr.review === "changes_requested"
+				? "changes_requested"
+				: pr.review === "review_required"
+					? "pending"
+					: "none";
+	const state = pr.state === "merged" ? "merged" : pr.state === "closed" ? "closed" : "open";
+	return {
+		number: pr.number,
+		url: pr.url,
+		state,
+		isDraft: pr.state === "draft",
+		ciStatus: ci,
+		reviewDecision: review,
+		mergeability: { mergeable: pr.mergeability === "mergeable" },
+		unresolvedThreads: pr.reviewComments ? 1 : 0,
+	};
+}
+
+function activityString(a: unknown): string | null {
+	if (typeof a === "string") return a || null;
+	if (a && typeof a === "object" && "state" in a && typeof (a as { state: unknown }).state === "string") {
+		return (a as { state: string }).state || null;
+	}
+	return null;
+}
+
+function mapSession(s: WireSession): DashboardSession {
+	const prs = (s.prs ?? []).map(mapPR);
+	return {
+		id: s.id,
+		projectId: s.projectId,
+		status: s.status ?? null,
+		activity: activityString(s.activity),
+		branch: s.branch ?? null,
+		issueId: s.issueId ?? null,
+		issueTitle: null,
+		userPrompt: null,
+		displayName: s.displayName ?? null,
+		summary: null,
+		createdAt: s.createdAt ?? "",
+		lastActivityAt: s.updatedAt ?? s.createdAt ?? "",
+		pr: prs[0] ?? null,
+		prs,
+		previewUrl: s.previewUrl ?? null,
+	};
+}
+
+function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink {
+	return {
+		id: s.id,
+		projectId: s.projectId,
+		projectName,
+		status: s.status ?? null,
+		activity: activityString(s.activity),
+		hasRuntime: !s.isTerminated,
+		isTerminal: !!s.isTerminated,
+		isRestorable: !!s.isTerminated,
+	};
+}
+
 // ---- Low-level fetch with friendly errors ----------------------------------
 
 const REQUEST_TIMEOUT_MS = 12000;
@@ -107,9 +210,11 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit): Promise
 		clearTimeout(timer);
 	}
 	if (!res.ok) {
+		// The daemon returns a locked JSON envelope: { error, code, message, requestId }.
 		let detail = "";
 		try {
-			detail = (await res.json())?.error ?? "";
+			const body = await res.json();
+			detail = body?.message ?? body?.error ?? "";
 		} catch {
 			/* ignore */
 		}
@@ -121,35 +226,49 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit): Promise
 // ---- Reads ------------------------------------------------------------------
 
 export async function getProjects(cfg: ServerConfig): Promise<ProjectInfo[]> {
-	const res = await req(cfg, "/api/projects");
+	const res = await req(cfg, `${API}/projects`);
 	const data = await res.json();
-	return Array.isArray(data?.projects) ? data.projects : [];
+	const projects = Array.isArray(data?.projects) ? data.projects : [];
+	return projects.map((p: { id: string; name: string; sessionPrefix?: string }) => ({
+		id: p.id,
+		name: p.name,
+		sessionPrefix: p.sessionPrefix,
+	}));
 }
 
-export async function getSessions(cfg: ServerConfig, projectId?: string): Promise<SessionsResponse> {
-	const q = projectId && projectId !== "all" ? `?project=${encodeURIComponent(projectId)}` : "?project=all";
-	const res = await req(cfg, `/api/sessions${q}`);
-	const data = await res.json();
-	return {
-		sessions: Array.isArray(data?.sessions) ? data.sessions : [],
-		orchestrators: Array.isArray(data?.orchestrators) ? data.orchestrators : [],
-		orchestratorId: data?.orchestratorId ?? null,
-		stats: data?.stats ?? {},
-	};
+export async function getSessions(cfg: ServerConfig, _projectId?: string): Promise<SessionsResponse> {
+	// The daemon exposes sessions and orchestrators as two lists. Fetch both,
+	// keep worker sessions for the board, and map orchestrators for their screen.
+	const [sessRes, orchRes, projects] = await Promise.all([
+		req(cfg, `${API}/sessions`),
+		req(cfg, `${API}/orchestrators`),
+		getProjects(cfg).catch(() => [] as ProjectInfo[]),
+	]);
+	const sessData = await sessRes.json();
+	const orchData = await orchRes.json();
+	const nameOf = new Map(projects.map((p) => [p.id, p.name]));
+
+	const rawSessions: WireSession[] = Array.isArray(sessData?.sessions) ? sessData.sessions : [];
+	const rawOrchestrators: WireSession[] = Array.isArray(orchData?.sessions) ? orchData.sessions : [];
+
+	const sessions = rawSessions.filter((s) => s.kind !== "orchestrator").map(mapSession);
+	const orchestrators = rawOrchestrators.map((s) => mapOrchestrator(s, nameOf.get(s.projectId) ?? s.projectId));
+
+	return { sessions, orchestrators, orchestratorId: null, stats: {} };
 }
 
 // ---- Writes / actions -------------------------------------------------------
 
 export async function killSession(cfg: ServerConfig, id: string): Promise<void> {
-	await req(cfg, `/api/sessions/${encodeURIComponent(id)}/kill`, { method: "POST" });
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/kill`, { method: "POST" });
 }
 
 export async function restoreSession(cfg: ServerConfig, id: string): Promise<void> {
-	await req(cfg, `/api/sessions/${encodeURIComponent(id)}/restore`, { method: "POST" });
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/restore`, { method: "POST" });
 }
 
 export async function sendMessage(cfg: ServerConfig, id: string, message: string): Promise<void> {
-	await req(cfg, `/api/sessions/${encodeURIComponent(id)}/send`, {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/send`, {
 		method: "POST",
 		body: JSON.stringify({ message }),
 	});
@@ -157,14 +276,22 @@ export async function sendMessage(cfg: ServerConfig, id: string, message: string
 
 export async function spawnSession(
 	cfg: ServerConfig,
-	opts: { projectId: string; prompt?: string; issueId?: string },
+	opts: { projectId: string; prompt?: string; issueId?: string; harness?: string },
 ): Promise<DashboardSession> {
-	const res = await req(cfg, "/api/spawn", {
+	const res = await req(cfg, `${API}/sessions`, {
 		method: "POST",
-		body: JSON.stringify(opts),
+		body: JSON.stringify({
+			projectId: opts.projectId,
+			prompt: opts.prompt,
+			issueId: opts.issueId,
+			// The daemon needs an agent harness unless the project configures a
+			// default worker.agent; the spawn screen lets the user pick one.
+			harness: opts.harness || undefined,
+			kind: "worker",
+		}),
 	});
 	const data = await res.json();
-	return data?.session;
+	return mapSession(data?.session ?? data);
 }
 
 export async function launchOrchestrator(
@@ -172,25 +299,28 @@ export async function launchOrchestrator(
 	projectId: string,
 	clean = false,
 ): Promise<OrchestratorLink> {
-	const res = await req(cfg, "/api/orchestrators", {
+	const res = await req(cfg, `${API}/orchestrators`, {
 		method: "POST",
 		body: JSON.stringify({ projectId, clean }),
 	});
 	const data = await res.json();
-	return data?.orchestrator;
+	const o = data?.orchestrator ?? {};
+	return {
+		id: o.id,
+		projectId: o.projectId ?? projectId,
+		projectName: o.projectName ?? projectId,
+		hasRuntime: true,
+		isTerminal: false,
+	};
 }
 
 export async function mergePR(cfg: ServerConfig, pr: DashboardPR): Promise<void> {
-	const params: string[] = [];
-	if (pr.owner) params.push(`owner=${encodeURIComponent(pr.owner)}`);
-	if (pr.repo) params.push(`repo=${encodeURIComponent(pr.repo)}`);
-	const q = params.length ? `?${params.join("&")}` : "";
-	await req(cfg, `/api/prs/${pr.number}/merge${q}`, { method: "POST" });
+	await req(cfg, `${API}/prs/${pr.number}/merge`, { method: "POST" });
 }
 
 // Quick reachability probe for the Settings "Test connection" button.
 export async function pingServer(cfg: ServerConfig): Promise<number> {
-	const res = await req(cfg, "/api/sessions?project=all");
+	const res = await req(cfg, `${API}/sessions`);
 	const data = await res.json();
 	return Array.isArray(data?.sessions) ? data.sessions.length : 0;
 }

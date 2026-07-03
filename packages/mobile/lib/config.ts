@@ -1,18 +1,20 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useState } from "react";
 
-// The user points the app at their AO server (over Tailscale). We store just the
-// host + ports; HTTP and WS URLs are derived from them.
+// The user points the app at their AO daemon (over Tailscale/LAN). We store the
+// host + API port; HTTP and WS URLs are derived from them. The Go daemon serves
+// both the REST API and the terminal mux (`/mux`) on the same port, so muxPort is
+// kept only for back-compat and no longer used to build the mux URL.
 export type ServerConfig = {
 	host: string; // e.g. "100.101.102.103" or "my-pc.tail1234.ts.net"
-	httpPort: string; // AO Next.js REST API, default 3000
-	muxPort: string; // AO direct-terminal-ws mux, default 14801
+	httpPort: string; // AO daemon HTTP port (REST API + /mux), default 3001
+	muxPort: string; // legacy separate mux port — unused against the Go daemon
 	secure?: boolean; // use https/wss instead of http/ws (TLS / Tailscale funnel)
 };
 
 export const DEFAULT_CONFIG: ServerConfig = {
 	host: "",
-	httpPort: "3000",
+	httpPort: "3001",
 	muxPort: "14801",
 	secure: false,
 };
@@ -47,7 +49,9 @@ export function httpBase(cfg: ServerConfig): string {
 }
 
 export function muxUrl(cfg: ServerConfig): string {
-	return `${cfg.secure ? "wss" : "ws"}://${cleanHost(cfg.host)}:${cfg.muxPort}/mux`;
+	// The Go daemon serves the terminal mux at /mux on the same HTTP port as the
+	// REST API (not a separate mux port).
+	return `${cfg.secure ? "wss" : "ws"}://${cleanHost(cfg.host)}:${cfg.httpPort}/mux`;
 }
 
 export function isConfigured(cfg: ServerConfig): boolean {

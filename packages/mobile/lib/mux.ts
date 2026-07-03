@@ -45,6 +45,49 @@ function utf8Encode(str: string): Uint8Array {
 	return new Uint8Array(out);
 }
 
+// The Go daemon carries terminal payloads as base64 (Go base64.StdEncoding),
+// because raw PTY bytes aren't valid UTF-8 and can't ride in a JSON string.
+// These helpers avoid depending on atob/btoa (not guaranteed in Hermes).
+const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const B64_LOOKUP = (() => {
+	const t = new Int16Array(256).fill(-1);
+	for (let i = 0; i < B64.length; i++) t[B64.charCodeAt(i)] = i;
+	return t;
+})();
+
+function base64ToBytes(b64: string): Uint8Array {
+	let clean = "";
+	for (let i = 0; i < b64.length; i++) {
+		const ch = b64.charCodeAt(i);
+		if (ch < 256 && B64_LOOKUP[ch] !== -1) clean += b64[i];
+	}
+	const out: number[] = [];
+	for (let i = 0; i < clean.length; i += 4) {
+		const a = B64_LOOKUP[clean.charCodeAt(i)] ?? 0;
+		const b = B64_LOOKUP[clean.charCodeAt(i + 1)] ?? 0;
+		const c = i + 2 < clean.length ? (B64_LOOKUP[clean.charCodeAt(i + 2)] ?? 0) : -1;
+		const d = i + 3 < clean.length ? (B64_LOOKUP[clean.charCodeAt(i + 3)] ?? 0) : -1;
+		out.push((a << 2) | (b >> 4));
+		if (c !== -1) out.push(((b & 15) << 4) | (c >> 2));
+		if (d !== -1) out.push(((c & 3) << 6) | d);
+	}
+	return new Uint8Array(out);
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+	let out = "";
+	for (let i = 0; i < bytes.length; i += 3) {
+		const a = bytes[i];
+		const b = i + 1 < bytes.length ? bytes[i + 1] : -1;
+		const c = i + 2 < bytes.length ? bytes[i + 2] : -1;
+		out += B64[a >> 2];
+		out += B64[((a & 3) << 4) | (b === -1 ? 0 : b >> 4)];
+		out += b === -1 ? "=" : B64[((b & 15) << 2) | (c === -1 ? 0 : c >> 6)];
+		out += c === -1 ? "=" : B64[c & 63];
+	}
+	return out;
+}
+
 /**
  * Thin client over AO's mux WebSocket. One socket multiplexes session-status
  * snapshots and per-session terminal I/O. Auto-reconnects with backoff.
@@ -132,6 +175,8 @@ export class MuxClient {
 			id?: string;
 			data?: string;
 			code?: number;
+			// The daemon reports terminal errors in `error`; older servers used `message`.
+			error?: string;
 			message?: string;
 		};
 		if (msg.ch === "sessions" && msg.type === "snapshot") {
@@ -140,7 +185,8 @@ export class MuxClient {
 			const id = msg.id ?? "";
 			switch (msg.type) {
 				case "data":
-					this.handlers.onTerminalData?.(id, utf8Encode(String(msg.data ?? "")));
+					// PTY output arrives base64-encoded; decode to raw bytes for xterm.
+					this.handlers.onTerminalData?.(id, base64ToBytes(String(msg.data ?? "")));
 					break;
 				case "opened":
 					this.handlers.onTerminalOpened?.(id);
@@ -149,7 +195,7 @@ export class MuxClient {
 					this.handlers.onTerminalExited?.(id, msg.code ?? 0);
 					break;
 				case "error":
-					this.handlers.onTerminalError?.(id, msg.message ?? "terminal error");
+					this.handlers.onTerminalError?.(id, msg.error ?? msg.message ?? "terminal error");
 					break;
 			}
 		}
@@ -193,7 +239,8 @@ export class MuxClient {
 	}
 
 	sendInput(id: string, data: string, projectId?: string) {
-		this.send({ ch: "terminal", id, type: "data", data, projectId });
+		// Keystrokes must be base64-encoded for the daemon (raw bytes over JSON).
+		this.send({ ch: "terminal", id, type: "data", data: bytesToBase64(utf8Encode(data)), projectId });
 	}
 
 	resize(id: string, cols: number, rows: number, projectId?: string) {
