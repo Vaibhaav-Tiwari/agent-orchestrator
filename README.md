@@ -1,6 +1,6 @@
 <div align="center">
 
-<p style="text-align: center;"><img src="ao-logo.svg" alt="Agent Orchestrator" width="200" height="200" style="max-width: 100%; height: auto; margin-left: 50px;" /></p>
+<p style="text-align: center;"><img src="ao-logo.svg" alt="Agent Orchestrator" width="200" height="200" style="max-width: 100%; height: auto; margin-left: 100px;" /></p>
 
 # Agent Orchestrator
 
