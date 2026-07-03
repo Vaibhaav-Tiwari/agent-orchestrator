@@ -252,7 +252,22 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string): Promi
 	const rawOrchestrators: WireSession[] = Array.isArray(orchData?.sessions) ? orchData.sessions : [];
 
 	const sessions = rawSessions.filter((s) => s.kind !== "orchestrator").map(mapSession);
-	const orchestrators = rawOrchestrators.map((s) => mapOrchestrator(s, nameOf.get(s.projectId) ?? s.projectId));
+
+	// The daemon returns EVERY orchestrator session per project (one per past
+	// kill/respawn), so pick a single one per project — preferring the live
+	// (non-terminated) one, else the most recent. Otherwise the screen would
+	// grab a stale terminated orchestrator and show "Restart" while a live one
+	// is actually running.
+	const bestByProject = new Map<string, WireSession>();
+	for (const s of rawOrchestrators) {
+		const cur = bestByProject.get(s.projectId);
+		// Keep a live orchestrator once found; otherwise take the later entry
+		// (the daemon lists them oldest→newest).
+		if (!cur || cur.isTerminated) bestByProject.set(s.projectId, s);
+	}
+	const orchestrators = [...bestByProject.values()].map((s) =>
+		mapOrchestrator(s, nameOf.get(s.projectId) ?? s.projectId),
+	);
 
 	return { sessions, orchestrators, orchestratorId: null, stats: {} };
 }
