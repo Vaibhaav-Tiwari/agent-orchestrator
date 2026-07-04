@@ -272,6 +272,25 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string): Promi
 	return { sessions, orchestrators, orchestratorId: null, stats: {} };
 }
 
+// ---- Preview (in-app browser) ----------------------------------------------
+
+// Ask the daemon whether this session has a detectable static preview entry
+// (index.html, or dist/build/public/index.html). Returns a URL the in-app
+// WebView can load, or null when no entry exists yet — the button then reports
+// "no preview". We build the URL from our own base (httpBase honors the TLS
+// toggle) rather than the daemon's `previewUrl`, which hardcodes http:// + its
+// request host and would break over a TLS tunnel (e.g. tailscale serve).
+export async function getPreview(cfg: ServerConfig, id: string): Promise<{ entry: string; url: string } | null> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/preview`);
+	const data = await res.json();
+	const entry = typeof data?.entry === "string" ? data.entry.trim() : "";
+	if (!entry) return null;
+	// Mirror the daemon's files route: /preview/files/<entry>, each segment escaped.
+	const escaped = entry.split("/").map(encodeURIComponent).join("/");
+	const url = `${httpBase(cfg)}${API}/sessions/${encodeURIComponent(id)}/preview/files/${escaped}`;
+	return { entry, url };
+}
+
 // ---- Writes / actions -------------------------------------------------------
 
 export async function killSession(cfg: ServerConfig, id: string): Promise<void> {

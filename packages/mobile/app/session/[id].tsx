@@ -4,7 +4,8 @@ import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Keyboard, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { isTerminalStatus, killSession, sendMessage } from "../../lib/api";
+import { WebView } from "react-native-webview";
+import { getPreview, isTerminalStatus, killSession, sendMessage } from "../../lib/api";
 import { isConfigured, loadConfig, type ServerConfig } from "../../lib/config";
 import { MuxClient, type MuxStatus } from "../../lib/mux";
 import { useApp } from "../../lib/store";
@@ -248,6 +249,15 @@ export default function TerminalScreen() {
 	// Track that + the known status so we can offer Restore instead of a dead term.
 	const [notFound, setNotFound] = useState(false);
 	const [restoring, setRestoring] = useState(false);
+	// In-app browser: shows the static preview file the agent generated (an
+	// index.html). We poll the daemon's on-demand detector while the terminal is
+	// open and AUTO-OPEN a WebView overlay the first time one appears. The user can
+	// close it and keep prompting; we won't re-pop the same file (autoOpenedRef
+	// remembers what we've already surfaced).
+	const [browserOpen, setBrowserOpen] = useState(false);
+	const [preview, setPreview] = useState<{ entry: string; url: string } | null>(null);
+	const previewWebRef = useRef<WebView>(null);
+	const autoOpenedRef = useRef<string | null>(null);
 
 	const { sessions, orchestrators, restore } = useApp();
 	const known = sessions.find((s) => s.id === id) ?? orchestrators.find((o) => o.id === id) ?? null;
@@ -340,6 +350,35 @@ export default function TerminalScreen() {
 		};
 	}, [id]);
 
+	// Poll for a generated preview (index.html) and auto-open it the first time it
+	// appears. Detection is on-demand server-side, so we re-check on an interval;
+	// once we've auto-opened a given URL we never force it open again, so closing
+	// the browser to keep prompting sticks. Manual reopen via the globe still works.
+	useEffect(() => {
+		if (!cfg || !isConfigured(cfg)) return;
+		let cancelled = false;
+		let timer: ReturnType<typeof setTimeout> | null = null;
+		const tick = async () => {
+			try {
+				const p = await getPreview(cfg, id);
+				if (cancelled) return;
+				setPreview(p);
+				if (p && autoOpenedRef.current !== p.url) {
+					autoOpenedRef.current = p.url;
+					setBrowserOpen(true);
+				}
+			} catch {
+				/* transient — keep polling */
+			}
+			if (!cancelled) timer = setTimeout(tick, 5000);
+		};
+		tick();
+		return () => {
+			cancelled = true;
+			if (timer) clearTimeout(timer);
+		};
+	}, [cfg, id]);
+
 	// The WebView's FitAddon measures the real cell size and reports the resulting
 	// cols/rows back through fressh's debug→logger.log channel. We forward those
 	// exact dims to the PTY so the display and the PTY always agree, regardless of
@@ -429,6 +468,20 @@ export default function TerminalScreen() {
 			setSending(false);
 		}
 	}, [msg, cfg, id]);
+
+	// Toggle the in-app browser. The poll above keeps `preview` current, so a tap
+	// just shows/hides the overlay. If nothing's been generated yet, explain that.
+	const toggleBrowser = useCallback(() => {
+		if (browserOpen) {
+			setBrowserOpen(false);
+			return;
+		}
+		if (!preview) {
+			setBanner("No preview yet — waiting for the agent to write an index.html…");
+			return;
+		}
+		setBrowserOpen(true);
+	}, [browserOpen, preview]);
 
 	const confirmKill = useCallback(() => {
 		const doKill = async () => {
@@ -549,6 +602,23 @@ export default function TerminalScreen() {
 						{size.cols}×{size.rows}
 					</Text>
 				)}
+				{/* In-app browser toggle — shows the agent's generated preview file.
+				    Brighter when one is available; auto-opens on first detection. */}
+				<Pressable
+					hitSlop={8}
+					onPress={toggleBrowser}
+					style={({ pressed }) => [
+						styles.browserBtn,
+						browserOpen && styles.browserBtnActive,
+						pressed && { opacity: 0.6 },
+					]}
+				>
+					<Feather
+						name="globe"
+						size={13}
+						color={browserOpen ? theme.blue : preview ? theme.textPrimary : theme.textSecondary}
+					/>
+				</Pressable>
 				{dead ? (
 					<Pressable
 						hitSlop={8}
@@ -604,6 +674,32 @@ export default function TerminalScreen() {
 							<Feather name="rotate-ccw" size={16} color="#06101f" />
 							<Text style={styles.restoreCtaText}>{restoring ? "Restoring…" : "Restore session"}</Text>
 						</Pressable>
+					</View>
+				)}
+
+				{/* In-app browser overlay: the agent's generated preview file. Sits over
+				    the terminal (which keeps running underneath) with its own bar. */}
+				{browserOpen && preview && (
+					<View style={styles.browserOverlay}>
+						<View style={styles.browserBar}>
+							<Feather name="globe" size={13} color={theme.textTertiary} />
+							<Text style={styles.browserPath} numberOfLines={1}>
+								{preview.entry}
+							</Text>
+							<Pressable hitSlop={8} onPress={() => previewWebRef.current?.reload()} style={styles.browserAction}>
+								<Feather name="rotate-cw" size={15} color={theme.blue} />
+							</Pressable>
+							<Pressable hitSlop={8} onPress={() => setBrowserOpen(false)} style={styles.browserAction}>
+								<Feather name="x" size={17} color={theme.textSecondary} />
+							</Pressable>
+						</View>
+						<WebView
+							ref={previewWebRef}
+							source={{ uri: preview.url }}
+							originWhitelist={["*"]}
+							style={styles.browserWeb}
+							onError={() => setBanner("Preview failed to load.")}
+						/>
 					</View>
 				)}
 			</View>
@@ -736,6 +832,33 @@ const styles = StyleSheet.create({
 		marginLeft: 12,
 	},
 	killText: { color: theme.red, fontWeight: "700", fontSize: 12 },
+	browserBtn: {
+		flexDirection: "row",
+		alignItems: "center",
+		justifyContent: "center",
+		backgroundColor: theme.bgElevated,
+		borderWidth: 1,
+		borderColor: theme.borderDefault,
+		borderRadius: 12,
+		paddingHorizontal: 10,
+		paddingVertical: 4,
+		marginLeft: 12,
+	},
+	browserBtnActive: { backgroundColor: theme.tintBlue, borderColor: theme.blue },
+	browserOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: theme.bgBase },
+	browserBar: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 10,
+		paddingHorizontal: 12,
+		paddingVertical: 8,
+		backgroundColor: theme.bgSurface,
+		borderBottomWidth: 1,
+		borderBottomColor: theme.borderSubtle,
+	},
+	browserPath: { flex: 1, color: theme.textSecondary, fontFamily: theme.fontMono, fontSize: 12 },
+	browserAction: { paddingHorizontal: 4, paddingVertical: 2 },
+	browserWeb: { flex: 1, backgroundColor: "#ffffff" },
 	headerBack: { flexDirection: "row", alignItems: "center", paddingRight: 8 },
 	headerBackText: { color: theme.blue, fontSize: 17, marginLeft: 2 },
 	restoreBtn: {

@@ -120,7 +120,16 @@ export class MuxClient {
 		this.handlers.onStatus?.("connecting");
 		let ws: WebSocket;
 		try {
-			ws = new WebSocket(muxUrl(this.cfg));
+			// The Go daemon's CORS guard 403s any non-loopback Origin before the WS
+			// upgrade. React Native's WebSocket (iOS SocketRocket) auto-sets Origin to
+			// the socket URL — e.g. the LAN/proxy address a phone points at — so the
+			// upgrade is rejected even though the REST API (fetch sends no Origin) works.
+			// Pin a loopback Origin so the upgrade passes. RN honors this third `options`
+			// arg; web browsers ignore it (and set Origin to the page), which is fine.
+			const WS = WebSocket as unknown as {
+				new (url: string, protocols?: string | string[], options?: { headers?: Record<string, string> }): WebSocket;
+			};
+			ws = new WS(muxUrl(this.cfg), undefined, { headers: { Origin: "http://localhost" } });
 		} catch (e) {
 			this.handlers.onStatus?.("error", String(e));
 			this.scheduleReconnect();
