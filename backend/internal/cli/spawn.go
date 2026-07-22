@@ -66,7 +66,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 		Short: "Spawn a worker agent session in a registered project",
 		Long: "Spawn a worker agent session in a registered project.\n\n" +
 			"The session runs the chosen agent in a\n" +
-			"fresh git worktree. Register the project first with `ao project add`.",
+			"fresh isolated workspace. Git projects use worktrees; Scratch uses an AO-managed directory.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.noTakeover && opts.claimPR == "" {
@@ -91,6 +91,15 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				return err
 			}
 			opts.harness = harness
+
+			if isScratchProject(project) {
+				if strings.TrimSpace(opts.branch) != "" {
+					return usageError{fmt.Errorf("scratch projects do not support --branch")}
+				}
+				if strings.TrimSpace(opts.claimPR) != "" {
+					return usageError{fmt.Errorf("scratch projects do not support --claim-pr")}
+				}
+			}
 
 			if !opts.skipAgentCheck {
 				if err := ctx.preflightSpawnAgentAuth(cmd.Context(), cmd, opts.harness); err != nil {
@@ -159,9 +168,9 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 		}
 		return pflag.NormalizedName(name)
 	})
-	f.StringVar(&opts.project, "project", "", "Project id to spawn the session in (default: AO_PROJECT_ID or current registered repo)")
+	f.StringVar(&opts.project, "project", "", "Project id to spawn the session in (default: AO_PROJECT_ID, current registered repo, or Scratch when it is the only project)")
 	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, grok, droid, amp, agy, crush, cursor, qwen, copilot, goose, auggie, continue, devin, cline, kimi, kiro, kilocode, vibe, pi, autohand (default: project worker.agent; required if the project has none)")
-	f.StringVar(&opts.branch, "branch", "", "Branch for the session worktree (default: ao/<session-id>/root)")
+	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: ao/<session-id>/root; unsupported for Scratch)")
 	f.StringVar(&opts.prompt, "prompt", "", "Initial prompt for the agent")
 	f.StringVar(&opts.issue, "issue", "", "Issue id to associate with the session")
 	f.StringVar(&opts.name, "name", "", "Display name shown in the sidebar (required, max 20 characters)")
@@ -239,6 +248,7 @@ func (c *commandContext) resolveProjectFromCWD(ctx context.Context) (projectDeta
 	})
 
 	var best projectDetails
+	details := make(map[string]projectDetails, len(list.Projects))
 	bestLen := -1
 	ambiguous := false
 	for _, summary := range list.Projects {
@@ -246,6 +256,7 @@ func (c *commandContext) resolveProjectFromCWD(ctx context.Context) (projectDeta
 		if err != nil {
 			return projectDetails{}, false, err
 		}
+		details[summary.ID] = project
 		if project.Path == "" {
 			continue
 		}
@@ -267,12 +278,30 @@ func (c *commandContext) resolveProjectFromCWD(ctx context.Context) (projectDeta
 		}
 	}
 	if bestLen == -1 {
+		if scratch, ok := onlyScratchProject(list.Projects, details); ok {
+			return scratch, true, nil
+		}
 		return projectDetails{}, false, nil
 	}
 	if ambiguous {
 		return projectDetails{}, false, usageError{fmt.Errorf("current directory matches multiple registered projects; pass --project")}
 	}
 	return best, true, nil
+}
+
+func onlyScratchProject(summaries []projectSummary, details map[string]projectDetails) (projectDetails, bool) {
+	if len(summaries) != 1 {
+		return projectDetails{}, false
+	}
+	project := details[summaries[0].ID]
+	if isScratchProject(project) {
+		return project, true
+	}
+	return projectDetails{}, false
+}
+
+func isScratchProject(project projectDetails) bool {
+	return project.ID == "scratch" && project.Kind == "scratch"
 }
 
 func normalizeProjectMatchPath(path string) (string, error) {
