@@ -350,7 +350,10 @@ export type OrchestratorHealth =
 
 export function orchestratorHealth(workspace: WorkspaceSummary, restarting = false): OrchestratorHealth {
 	if (restarting) {
-		return { state: "restarting", message: "Restarting orchestrator. New tasks wait until the replacement is ready." };
+		return {
+			state: "restarting",
+			message: "Restarting orchestrator. New tasks wait until the replacement is ready.",
+		};
 	}
 	const active = workspace.sessions.filter((session) => isOrchestratorSession(session) && sessionIsActive(session));
 	if (active.length > 1) {

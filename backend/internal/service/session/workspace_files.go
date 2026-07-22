@@ -337,21 +337,28 @@ func scratchWorkspaceFileInfo(rootResolved, fullPath string, entry fs.DirEntry) 
 		}
 		return info, true, nil
 	}
-	targetInfo, err := os.Stat(fullPath)
-	if err != nil {
+	targetInfo, ok := statScratchFileTarget(fullPath)
+	if !ok {
 		return nil, false, nil
 	}
-	if targetInfo.IsDir() {
-		return nil, false, nil
-	}
-	resolved, err := resolvedFilesystemPath(fullPath)
-	if err != nil {
+	resolved, ok := resolvedScratchPath(fullPath)
+	if !ok {
 		return nil, false, nil
 	}
 	if !pathWithin(rootResolved, resolved) {
 		return nil, false, nil
 	}
 	return targetInfo, true, nil
+}
+
+func statScratchFileTarget(path string) (os.FileInfo, bool) {
+	info, err := os.Stat(path)
+	return info, err == nil && !info.IsDir()
+}
+
+func resolvedScratchPath(path string) (string, bool) {
+	resolved, err := resolvedFilesystemPath(path)
+	return resolved, err == nil
 }
 
 func workspaceGitFiles(ctx context.Context, root string) ([]string, bool, error) {
