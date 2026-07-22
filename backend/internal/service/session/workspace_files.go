@@ -351,13 +351,13 @@ func scratchWorkspaceFileInfo(rootResolved, fullPath string, entry fs.DirEntry) 
 	return targetInfo, true, nil
 }
 
-func statScratchFileTarget(path string) (os.FileInfo, bool) {
-	info, err := os.Stat(path)
+func statScratchFileTarget(filePath string) (os.FileInfo, bool) {
+	info, err := os.Stat(filePath)
 	return info, err == nil && !info.IsDir()
 }
 
-func resolvedScratchPath(path string) (string, bool) {
-	resolved, err := resolvedFilesystemPath(path)
+func resolvedScratchPath(filePath string) (string, bool) {
+	resolved, err := resolvedFilesystemPath(filePath)
 	return resolved, err == nil
 }
 
