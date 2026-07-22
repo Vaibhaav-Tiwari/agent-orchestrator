@@ -42,6 +42,8 @@ func New(deps Deps) *Workspace {
 	}
 }
 
+// Create delegates session workspace creation to the project-appropriate
+// workspace adapter.
 func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
 	adapter, err := w.adapterForProject(ctx, cfg.ProjectID)
 	if err != nil {
@@ -50,6 +52,8 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	return adapter.Create(ctx, cfg)
 }
 
+// Restore delegates session workspace restoration to the project-appropriate
+// workspace adapter.
 func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
 	adapter, err := w.adapterForProject(ctx, cfg.ProjectID)
 	if err != nil {
@@ -58,6 +62,8 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 	return adapter.Restore(ctx, cfg)
 }
 
+// Destroy delegates normal session workspace cleanup to the
+// project-appropriate workspace adapter.
 func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error {
 	adapter, err := w.adapterForProject(ctx, info.ProjectID)
 	if err != nil {
@@ -66,6 +72,8 @@ func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error
 	return adapter.Destroy(ctx, info)
 }
 
+// ForceDestroy delegates forced session workspace cleanup to the
+// project-appropriate workspace adapter.
 func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) error {
 	adapter, err := w.adapterForProject(ctx, info.ProjectID)
 	if err != nil {
@@ -74,6 +82,8 @@ func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) 
 	return adapter.ForceDestroy(ctx, info)
 }
 
+// StashUncommitted delegates preservation of dirty workspace state to the
+// project-appropriate workspace adapter.
 func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceInfo) (string, error) {
 	adapter, err := w.adapterForProject(ctx, info.ProjectID)
 	if err != nil {
@@ -82,6 +92,8 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 	return adapter.StashUncommitted(ctx, info)
 }
 
+// ApplyPreserved delegates restored dirty workspace state application to the
+// project-appropriate workspace adapter.
 func (w *Workspace) ApplyPreserved(ctx context.Context, info ports.WorkspaceInfo, ref string) error {
 	adapter, err := w.adapterForProject(ctx, info.ProjectID)
 	if err != nil {
@@ -90,6 +102,8 @@ func (w *Workspace) ApplyPreserved(ctx context.Context, info ports.WorkspaceInfo
 	return adapter.ApplyPreserved(ctx, info, ref)
 }
 
+// CreateWorkspaceProject delegates root-as-repo workspace project creation to
+// the git adapter.
 func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.WorkspaceProjectConfig) (ports.WorkspaceProjectInfo, error) {
 	gitProject, err := w.gitWorkspaceProject()
 	if err != nil {
@@ -98,6 +112,8 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 	return gitProject.CreateWorkspaceProject(ctx, cfg)
 }
 
+// DestroyWorkspaceProject delegates root-as-repo workspace project cleanup to
+// the git adapter.
 func (w *Workspace) DestroyWorkspaceProject(ctx context.Context, info ports.WorkspaceProjectInfo) error {
 	gitProject, err := w.gitWorkspaceProject()
 	if err != nil {
