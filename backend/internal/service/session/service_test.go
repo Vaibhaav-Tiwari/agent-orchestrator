@@ -339,17 +339,42 @@ func TestListWorkspaceFilesScratchUsesFilesystem(t *testing.T) {
 	if strings.Join(paths, "|") != strings.Join(wantPaths, "|") {
 		t.Fatalf("paths = %#v, want %#v", paths, wantPaths)
 	}
-	if byPath["README.md"].Additions != 2 || byPath["README.md"].Deletions != 0 {
-		t.Fatalf("README counts = +%d -%d, want +2 -0", byPath["README.md"].Additions, byPath["README.md"].Deletions)
+	if byPath["README.md"].Additions != 0 || byPath["README.md"].Deletions != 0 {
+		t.Fatalf("README counts = +%d -%d, want +0 -0", byPath["README.md"].Additions, byPath["README.md"].Deletions)
 	}
-	if byPath["nested/task.txt"].Additions != 1 {
-		t.Fatalf("nested/task.txt additions = %d, want 1", byPath["nested/task.txt"].Additions)
+	if byPath["nested/task.txt"].Additions != 0 {
+		t.Fatalf("nested/task.txt additions = %d, want 0", byPath["nested/task.txt"].Additions)
 	}
 	if !byPath["image.bin"].Binary || byPath["image.bin"].Additions != 0 || byPath["image.bin"].Deletions != 0 {
 		t.Fatalf("binary summary = %#v, want binary with zero counts", byPath["image.bin"])
 	}
 	if _, ok := byPath[".git/config"]; ok {
 		t.Fatal(".git content should not be listed for scratch")
+	}
+}
+
+func TestListWorkspaceFilesScratchStopsAtFileLimit(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < maxWorkspaceFiles+1; i++ {
+		writeWorkspaceFile(t, root, fmt.Sprintf("file-%05d.txt", i), "content\n")
+	}
+	st := newFakeStore()
+	st.projects["scratch"] = domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch}
+	st.sessions["scratch-1"] = domain.SessionRecord{
+		ID:        "scratch-1",
+		ProjectID: "scratch",
+		Metadata:  domain.SessionMetadata{WorkspacePath: root},
+	}
+
+	got, err := (&Service{store: st}).ListWorkspaceFiles(context.Background(), "scratch-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Truncated {
+		t.Fatal("Truncated = false, want true")
+	}
+	if len(got.Files) != maxWorkspaceFiles {
+		t.Fatalf("file count = %d, want %d", len(got.Files), maxWorkspaceFiles)
 	}
 }
 

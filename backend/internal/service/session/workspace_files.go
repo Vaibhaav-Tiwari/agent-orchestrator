@@ -247,20 +247,16 @@ func scratchWorkspaceFiles(root string) ([]WorkspaceFileSummary, bool, error) {
 		}
 		if len(files) >= maxWorkspaceFiles {
 			truncated = true
-			return nil
+			return filepath.SkipAll
 		}
-		content, binary, _, err := readWorkspaceTextFile(fullPath, maxWorkspaceFileBytes)
+		_, binary, _, err := readWorkspaceTextFile(fullPath, 8192)
 		if err != nil {
 			return err
-		}
-		additions := 0
-		if !binary {
-			additions = textLineCount(content)
 		}
 		files = append(files, WorkspaceFileSummary{
 			Path:      rel,
 			Status:    WorkspaceFileAdded,
-			Additions: additions,
+			Additions: 0,
 			Deletions: 0,
 			Size:      info.Size(),
 			Binary:    binary,

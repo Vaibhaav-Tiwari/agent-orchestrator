@@ -510,9 +510,10 @@ func (m *Service) emitProjectAdded(row domain.ProjectRecord, firstProject bool) 
 	})
 }
 
-// EnsureDefaultScratchProject seeds the built-in first-run scratch project only
-// for a truly fresh registry. Archived rows count as prior user intent, so they
-// suppress reseeding too.
+// EnsureDefaultScratchProject seeds the built-in first-run scratch project when
+// the registry has no active projects. Archived rows do not suppress reseeding:
+// otherwise deleting Scratch can leave first-run users with no non-git path
+// back into AO.
 func (m *Service) EnsureDefaultScratchProject(ctx context.Context, scratchPath string) (Project, error) {
 	scratchPath = strings.TrimSpace(scratchPath)
 	if scratchPath == "" {
@@ -527,11 +528,11 @@ func (m *Service) EnsureDefaultScratchProject(ctx context.Context, scratchPath s
 	m.addMu.Lock()
 	defer m.addMu.Unlock()
 
-	count, err := m.store.CountProjectsIncludingArchived(ctx)
+	projects, err := m.store.ListProjects(ctx)
 	if err != nil {
 		return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load projects")
 	}
-	if count != 0 {
+	if len(projects) != 0 {
 		return Project{}, nil
 	}
 

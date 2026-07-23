@@ -265,7 +265,7 @@ func TestManager_EnsureDefaultScratchProjectSeedsFreshRegistry(t *testing.T) {
 	}
 }
 
-func TestManager_EnsureDefaultScratchProjectDoesNotReseedAfterArchive(t *testing.T) {
+func TestManager_EnsureDefaultScratchProjectDoesNotReseedWithActiveProject(t *testing.T) {
 	ctx := context.Background()
 	store, err := sqlite.Open(t.TempDir())
 	if err != nil {
@@ -281,9 +281,6 @@ func TestManager_EnsureDefaultScratchProjectDoesNotReseedAfterArchive(t *testing
 		RegisteredAt: now,
 	}); err != nil {
 		t.Fatalf("seed old project: %v", err)
-	}
-	if ok, err := store.ArchiveProject(ctx, "old", now.Add(time.Minute)); err != nil || !ok {
-		t.Fatalf("archive old project: ok=%v err=%v", ok, err)
 	}
 
 	m := project.NewWithDeps(project.Deps{Store: store})
@@ -292,45 +289,46 @@ func TestManager_EnsureDefaultScratchProjectDoesNotReseedAfterArchive(t *testing
 		t.Fatalf("EnsureDefaultScratchProject: %v", err)
 	}
 	if proj.ID != "" {
-		t.Fatalf("seeded scratch after archived project: %#v", proj)
+		t.Fatalf("seeded scratch with active project: %#v", proj)
 	}
-	if list, err := m.List(ctx); err != nil || len(list) != 0 {
-		t.Fatalf("active projects = %#v, %v; want none", list, err)
+	if list, err := m.List(ctx); err != nil || len(list) != 1 || list[0].ID != "old" {
+		t.Fatalf("active projects = %#v, %v; want old project only", list, err)
 	}
 }
 
-func TestManager_EnsureDefaultScratchProjectDoesNotCreateDirectoryForNonFreshRegistry(t *testing.T) {
+func TestManager_EnsureDefaultScratchProjectReseedsAfterArchivedScratchLeavesNoActiveProjects(t *testing.T) {
 	ctx := context.Background()
 	store, err := sqlite.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	now := time.Now().UTC().Truncate(time.Second)
-	if err := store.UpsertProject(ctx, domain.ProjectRecord{
-		ID:           "old",
-		DisplayName:  "Old",
-		Path:         "/tmp/old",
-		Kind:         domain.ProjectKindSingleRepo,
-		RegisteredAt: now,
-	}); err != nil {
-		t.Fatalf("seed old project: %v", err)
-	}
-	if ok, err := store.ArchiveProject(ctx, "old", now.Add(time.Minute)); err != nil || !ok {
-		t.Fatalf("archive old project: ok=%v err=%v", ok, err)
-	}
-
 	m := project.NewWithDeps(project.Deps{Store: store})
-	scratchPath := filepath.Join(t.TempDir(), "scratch", "default")
+	firstPath := filepath.Join(t.TempDir(), "scratch", "default")
+	first, err := m.EnsureDefaultScratchProject(ctx, firstPath)
+	if err != nil {
+		t.Fatalf("first EnsureDefaultScratchProject: %v", err)
+	}
+	if first.ID != "scratch" {
+		t.Fatalf("first scratch project = %#v", first)
+	}
+	if ok, err := store.ArchiveProject(ctx, "scratch", time.Now().UTC().Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("archive scratch project: ok=%v err=%v", ok, err)
+	}
+	scratchPath := filepath.Join(t.TempDir(), "scratch", "replacement")
 	proj, err := m.EnsureDefaultScratchProject(ctx, scratchPath)
 	if err != nil {
 		t.Fatalf("EnsureDefaultScratchProject: %v", err)
 	}
-	if proj.ID != "" {
-		t.Fatalf("seeded scratch after archived project: %#v", proj)
+	if proj.ID != "scratch" || proj.Path != scratchPath || proj.Kind != domain.ProjectKindScratch {
+		t.Fatalf("reseeded scratch project = %#v", proj)
 	}
-	if _, err := os.Stat(scratchPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("scratch directory stat err = %v, want not exist", err)
+	list, err := m.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != "scratch" {
+		t.Fatalf("active projects = %#v, want reseeded scratch", list)
 	}
 }
 
