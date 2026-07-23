@@ -107,6 +107,12 @@ func (w *Workspace) ApplyPreserved(_ context.Context, _ ports.WorkspaceInfo, ref
 	return nil
 }
 
+// AddExclude is a no-op for scratch because scratch workspaces are plain
+// directories with no git status or commit surface.
+func (w *Workspace) AddExclude(context.Context, ports.WorkspaceInfo, ...string) error {
+	return nil
+}
+
 func (w *Workspace) managedPath(cfg ports.WorkspaceConfig) (string, error) {
 	if cfg.ProjectID == "" {
 		return "", errors.New("scratch workspace: project id is required")

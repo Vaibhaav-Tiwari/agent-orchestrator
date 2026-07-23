@@ -102,6 +102,16 @@ func (w *Workspace) ApplyPreserved(ctx context.Context, info ports.WorkspaceInfo
 	return adapter.ApplyPreserved(ctx, info, ref)
 }
 
+// AddExclude delegates local workspace ignore updates to the project-appropriate
+// workspace adapter.
+func (w *Workspace) AddExclude(ctx context.Context, info ports.WorkspaceInfo, patterns ...string) error {
+	adapter, err := w.adapterForProject(ctx, info.ProjectID)
+	if err != nil {
+		return err
+	}
+	return adapter.AddExclude(ctx, info, patterns...)
+}
+
 // CreateWorkspaceProject delegates root-as-repo workspace project creation to
 // the git adapter.
 func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.WorkspaceProjectConfig) (ports.WorkspaceProjectInfo, error) {

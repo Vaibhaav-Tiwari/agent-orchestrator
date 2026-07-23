@@ -82,7 +82,8 @@ export type AgentProvider =
 	| "kilocode"
 	| "vibe"
 	| "pi"
-	| "autohand";
+	| "autohand"
+	| "fake";
 
 /** A file changed in a worker workspace (drives the review rail). */
 export type ChangedFile = {
@@ -394,6 +395,7 @@ export function toAgentProvider(provider?: string): AgentProvider {
 		case "vibe":
 		case "pi":
 		case "autohand":
+		case "fake":
 			return provider;
 		default:
 			return "codex";

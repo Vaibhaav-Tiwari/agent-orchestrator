@@ -43,6 +43,12 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	if cwd, err := os.Getwd(); err == nil {
+		cfg.StartupWorkingDirectory = cwd
+	}
+	if err := stabilizeWorkingDirectory(cfg.DataDir); err != nil {
+		return err
+	}
 
 	log := newLogger()
 
@@ -179,6 +185,11 @@ func Run() error {
 	}
 	mc := &controllers.MobileController{Bridge: bs}
 
+	// Standalone shell terminals: user-opened shells with no agent session
+	// behind them. They reuse the same runtime adapter (and therefore the same
+	// terminal mux) as session panes, but keep their own ids, storage, and
+	// lifetime — see internal/service/shellterm.
+	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, log)
 	// Push-device registry: persisted phones that receive OS push notifications.
 	// A load failure must not block boot — degrade to no push rather than refusing
 	// to start the daemon. pushRegistry (interface) is assigned only when load
@@ -214,6 +225,12 @@ func Run() error {
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
 		Import:             importsvc.New(importsvc.Deps{Store: store}),
+		ShellTerminals:     shellTermSvc,
+		CDC:                store,
+		Events:             cdcPipe.Broadcaster,
+		Activity:           lcStack.LCM,
+		Telemetry:          telemetrySink,
+		Mobile:             mc,
 		DevImport: devimportsvc.New(devimportsvc.Deps{
 			Store:         store,
 			TargetDataDir: cfg.DataDir,
@@ -221,11 +238,6 @@ func Run() error {
 				return sqlite.OpenReadOnly(ctx, dataDir)
 			},
 		}),
-		CDC:       store,
-		Events:    cdcPipe.Broadcaster,
-		Activity:  lcStack.LCM,
-		Telemetry: telemetrySink,
-		Mobile:    mc,
 	})
 	if err != nil {
 		stop()
@@ -321,4 +333,17 @@ func seedScratchProjectOnBoot(ctx context.Context, cfg config.Config, projects *
 // can capture it separately from any structured stdout protocol added later.
 func newLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+func stabilizeWorkingDirectory(dataDir string) error {
+	if dataDir == "" {
+		return fmt.Errorf("daemon working directory: data dir is required")
+	}
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return fmt.Errorf("daemon working directory: create %s: %w", dataDir, err)
+	}
+	if err := os.Chdir(dataDir); err != nil {
+		return fmt.Errorf("daemon working directory: chdir %s: %w", dataDir, err)
+	}
+	return nil
 }
